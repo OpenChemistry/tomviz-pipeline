@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tomviz-pipeline"
+dynamic = ["version"]
+description = "Node-graph pipeline engine for tomographic data processing, usable standalone or embedded in applications such as tomviz."
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Alessandro Genova", email = "alessandro.genova@kitware.com" },
+]
+requires-python = ">=3.9"
+keywords = ["tomography", "tomviz", "pipeline", "volumetric", "image-processing"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+dependencies = [
+    "numpy",
+    "h5py",
+    "click",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+vtk = ["vtk"]
+test = ["pytest"]
+dev = ["pytest", "flake8"]
+
+[project.urls]
+Homepage = "https://www.tomviz.org/"
+Repository = "https://github.com/OpenChemistry/tomviz-pipeline"
+Issues = "https://github.com/OpenChemistry/tomviz-pipeline/issues"
+
+[project.scripts]
+tomviz-pipeline = "tomviz_pipeline.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "tomviz_pipeline.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
