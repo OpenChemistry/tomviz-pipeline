@@ -34,7 +34,7 @@ def _column_value(column, row: int):
 
 def _write_table(table: Table, target_path: Path) -> None:
     columns = list(table.columns.values())
-    with open(target_path, 'w', newline='') as f:
+    with open(target_path, 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
         w.writerow(table.column_names)
         for r in range(table.num_rows):
@@ -50,7 +50,7 @@ def _write_vtk_table(payload, target_path: Path) -> None:
     headers = [c.GetName() or f'column_{i}' for i, c in enumerate(columns)]
     rows = payload.GetNumberOfRows()
 
-    with open(target_path, 'w', newline='') as f:
+    with open(target_path, 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
         w.writerow(headers)
         for r in range(rows):

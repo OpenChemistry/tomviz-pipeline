@@ -55,3 +55,10 @@ version = { attr = "tomviz_pipeline.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Deprecations fail the suite so removals in the next Python show up a
+# release early. VTK 9.6's numpy_support trips a NumPy 2.5 deprecation
+# on every vtk_to_numpy call; that one is theirs to fix.
+filterwarnings = [
+    "error::DeprecationWarning",
+    "ignore:Setting the shape on a NumPy array:DeprecationWarning",
+]

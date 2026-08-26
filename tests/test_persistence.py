@@ -332,6 +332,20 @@ def test_switch_on_disk_to_in_memory_loads_and_pins(_cache_dir):
     assert _cache_files(_cache_dir) == []  # cache dropped
 
 
+def test_release_after_port_finalizer_does_not_spill(_cache_dir):
+    """A pinned handle can be released in the same garbage collection
+    that tears down its port. Python 3.15 no longer guarantees the
+    port's weakref is cleared before the handle's callback runs, so the
+    callback has to notice the port is already gone — otherwise it
+    spills a cache file nothing will ever remove."""
+    src, port = _on_disk_port(_cache_dir)
+    handle = port.take()
+    port._disk.finalize()  # what the port's own finalizer does
+    del handle
+    gc.collect()
+    assert _cache_files(_cache_dir) == []
+
+
 def test_switch_on_disk_to_transient_drops_data_and_cache(_cache_dir):
     src, port = _on_disk_port(_cache_dir)
     handle = port.take()

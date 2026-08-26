@@ -46,7 +46,7 @@ def load_state(state_file_path) -> Pipeline:
     if suffix == '.tvh5':
         state, raw_state_json = _read_tvh5_state(state_file_path)
     else:
-        with open(state_file_path) as f:
+        with open(state_file_path, encoding='utf-8') as f:
             state = json.load(f)
         raw_state_json = state
 
@@ -90,7 +90,7 @@ def read_state_json(state_file_path) -> dict:
     if state_file_path.suffix.lower() == '.tvh5':
         state, _ = _read_tvh5_state(state_file_path)
         return state
-    with open(state_file_path) as f:
+    with open(state_file_path, encoding='utf-8') as f:
         return json.load(f)
 
 

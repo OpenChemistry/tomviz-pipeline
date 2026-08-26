@@ -835,6 +835,7 @@ def test_run_output_format_state_persists_table_payloads(tmp_path):
     C++ Tvh5Format::writeTablePayload. The dataRef on the port entry
     must point at the group, and on reload (via load_state) the port
     must carry an equivalent vtkTable."""
+    pytest.importorskip('vtk')
     from tomviz_pipeline.state.state_io import load_state
 
     arr = (np.arange(24, dtype=np.uint8) + 1).reshape((2, 3, 4))
@@ -929,6 +930,7 @@ def test_run_output_format_state_persists_molecule_payloads(tmp_path):
     persisted as atomic-numbers / positions / bond datasets under
     /data/<id>/<port>/. On reload (via load_state) the port carries an
     equivalent vtkMolecule. Mirrors the table case below."""
+    pytest.importorskip('vtk')
     from tomviz_pipeline.state.state_io import load_state
 
     arr = (np.arange(24, dtype=np.uint8) + 1).reshape((2, 3, 4))

@@ -413,7 +413,7 @@ class FilesProgress(JsonProgress):
         file_path = os.path.join(self._path,
                                  'progress%d' % self._sequence_number)
         self._sequence_number += 1
-        with open(file_path, 'w') as f:
+        with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(data, f)
 
     def control_channel(self):

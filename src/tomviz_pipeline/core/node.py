@@ -98,6 +98,31 @@ def _remove_cache_file(path: str):
         pass
 
 
+class _DiskCache:
+    """The cache-file path of an OutputPort, held separately so the
+    port's finalizer can be registered at construction and pick up
+    whatever path exists when the port dies. ``dead`` is set by that
+    finalizer: a handle released in the same garbage collection may
+    still resolve its weakref to the port (Python 3.15 no longer clears
+    weakrefs before running other finalizers) and must not spill for a
+    port that is already gone."""
+
+    __slots__ = ('path', 'dead')
+
+    def __init__(self):
+        self.path: Optional[str] = None
+        self.dead = False
+
+    def remove(self):
+        path, self.path = self.path, None
+        if path is not None:
+            _remove_cache_file(path)
+
+    def finalize(self):
+        self.dead = True
+        self.remove()
+
+
 class InputPort(Port):
     """Accepts a single incoming Link. accepted_types is an informational
     list — type validation is intentionally lax in the Python runtime.
@@ -175,8 +200,12 @@ class OutputPort(Port):
         self._generation = 0
         self._disk_lock = threading.Lock()
         self._on_disk = False
-        self._disk_file: Optional[str] = None
-        self._disk_finalizer = None
+        self._disk = _DiskCache()
+        # Registered now rather than at spill time: a handle can be
+        # released while the port itself is being garbage collected, and
+        # a finalizer created during that collection never runs, leaving
+        # the cache file behind.
+        weakref.finalize(self, _DiskCache.finalize, self._disk)
         self.outgoing_links: list[Link] = []
         self.data_changed = Signal('data_changed')
         self.data_location_changed = Signal('data_location_changed')
@@ -326,26 +355,23 @@ class OutputPort(Port):
         # the port's CURRENT policy (not the one at creation time) —
         # that is what makes runtime mode switching correct.
         port = port_ref()
-        if port is None or port._generation != generation:
+        if (port is None or port._disk.dead
+                or port._generation != generation):
             return
         if port._persistent and port._mode == PersistenceMode.OnDisk:
             port._swap_to_disk(data)
 
     def _swap_to_disk(self, data: PortData):
         with self._disk_lock:
-            if self._disk_file is None:
+            if self._disk.path is None:
                 try:
-                    self._disk_file = create_cache_file()
+                    self._disk.path = create_cache_file()
                 except OSError:
                     logger.exception(
                         "Failed to create cache file for port '%s'",
                         self.name)
                     return
-                # The cache file lives for the port's lifetime; remove it
-                # when the port is garbage collected (or at exit).
-                self._disk_finalizer = weakref.finalize(
-                    self, _remove_cache_file, self._disk_file)
-            ok = write_port_data_to_file(data, self._disk_file)
+            ok = write_port_data_to_file(data, self._disk.path)
             self._on_disk = ok
         if ok:
             self.data_location_changed.emit(self, DataLocation.OnDisk)
@@ -354,9 +380,9 @@ class OutputPort(Port):
 
     def _reload_from_disk(self) -> Optional[PortDataHandle]:
         with self._disk_lock:
-            if not self._on_disk or self._disk_file is None:
+            if not self._on_disk or self._disk.path is None:
                 return None
-            data = read_port_data_from_file(self._disk_file)
+            data = read_port_data_from_file(self._disk.path)
             if data is None:
                 return None
             return self._wrap(data)
@@ -364,14 +390,7 @@ class OutputPort(Port):
     def _drop_disk_cache(self):
         with self._disk_lock:
             self._on_disk = False
-            path = self._disk_file
-            self._disk_file = None
-            finalizer = self._disk_finalizer
-            self._disk_finalizer = None
-        if finalizer is not None:
-            finalizer.detach()
-        if path is not None:
-            _remove_cache_file(path)
+            self._disk.remove()
 
 
 class Link:

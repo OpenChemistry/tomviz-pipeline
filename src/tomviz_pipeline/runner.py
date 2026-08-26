@@ -273,7 +273,7 @@ def check_auto_execute(state_path, output_dir, node_id: int,
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     _write_node_states(pipeline, out_dir)
-    with open(out_dir / 'auto_execute.json', 'w') as f:
+    with open(out_dir / 'auto_execute.json', 'w', encoding='utf-8') as f:
         json.dump({'shouldExecute': should}, f)
     return should
 
@@ -284,7 +284,7 @@ def _apply_node_states(pipeline: Pipeline, node_state_file) -> None:
     if not node_state_file:
         return
     try:
-        with open(node_state_file) as f:
+        with open(node_state_file, encoding='utf-8') as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError):
         logger.exception('Failed to read node-state file %s',
@@ -318,7 +318,7 @@ def _write_node_states(pipeline: Pipeline, out_dir) -> None:
                 'bool/int/float/str, lists, and dicts.', node.id)
             continue
         states[str(node.id)] = state
-    with open(Path(out_dir) / 'node_state.json', 'w') as f:
+    with open(Path(out_dir) / 'node_state.json', 'w', encoding='utf-8') as f:
         json.dump({'nodes': states}, f)
 
 
@@ -339,7 +339,7 @@ def _write_state_snapshot(run_dir: Path, run_state: dict) -> None:
     """Write the patched state JSON to ``run_dir/state.tvsm``. The
     snapshot is itself a valid input to :func:`run`."""
     target = run_dir / 'state.tvsm'
-    with open(target, 'w') as f:
+    with open(target, 'w', encoding='utf-8') as f:
         json.dump(run_state, f, indent=2)
 
 
