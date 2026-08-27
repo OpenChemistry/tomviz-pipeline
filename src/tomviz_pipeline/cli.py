@@ -117,10 +117,10 @@ def _configure_logging():
 @click.option('--output-format', 'output_format',
               type=click.Choice(['port', 'state', 'state+port']),
               default='port', show_default=True,
-              help='What to write per run. "port" → typed per-port '
-                   'files (EMD/CSV/XYZ). "state" → a single '
+              help='What to write per run. "port" -> typed per-port '
+                   'files (EMD/CSV/XYZ). "state" -> a single '
                    'output_state.tvh5 bundling the schema-v2 state '
-                   'with embedded volume payloads. "state+port" → '
+                   'with embedded volume payloads. "state+port" -> '
                    'both.')
 @click.option('--node-state', 'node_state_file',
               type=click.Path(exists=True, dir_okay=False), default=None,
@@ -180,7 +180,7 @@ def main(state_file, output_dir, progress_method, progress_path,
 def _build_inputs_arg(raw_inputs: list[str]):
     """Parse the raw ``--input`` strings into the value to forward to
     :func:`tomviz_pipeline.run`. The result is either a flat list of
-    paths (bare mode → single-source convenience) or a
+    paths (bare mode -> single-source convenience) or a
     ``dict[node_id, list[paths]]`` (prefixed mode)."""
     parsed = [_parse_input(v) for v in raw_inputs]
     bare = [paths for sid, paths in parsed if sid is None]
