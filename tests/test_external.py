@@ -230,6 +230,79 @@ def test_external_should_auto_execute_without_cli_answers_false(tmp_path):
     assert node.user_state == {}
 
 
+# ---- Kernel parameter write-back across the process boundary ---------------
+
+
+_WRITEBACK_DESCRIPTION = json.dumps({
+    'name': 'WriteBack',
+    'outputs': [{'name': 'volume', 'type': 'ImageData'}],
+    'parameters': [
+        {'name': 'frame', 'type': 'int', 'default': 0},
+        {'name': 'mode', 'type': 'enumeration', 'default': 0,
+         'options': [{'Fast': 'fast'}, {'Slow': 'slow'}]},
+    ],
+})
+
+_WRITEBACK_SCRIPT = '''
+import numpy as np
+from tomviz_pipeline.dataset import Dataset
+from tomviz_pipeline.kernels import SourceKernel
+
+
+class WriteBack(SourceKernel):
+    def produce(self, frame=0, mode='fast'):
+        self.set_parameter('frame', frame + 1)
+        arr = np.full((2, 2, 2), frame, dtype=np.float32)
+        return {'volume': Dataset({'Scalars': arr}, active='Scalars')}
+
+    def should_auto_execute(self, frame=0, mode='fast'):
+        self.set_parameter('mode', 'slow')
+        return frame >= 2
+'''
+
+
+def _writeback_node(env_path):
+    from tomviz_pipeline import PythonNode
+    node = PythonNode(_WRITEBACK_DESCRIPTION, kernel=_WRITEBACK_SCRIPT)
+    node.node_executor = ExternalNodeExecutor(env_path=str(env_path))
+    return node
+
+
+def test_external_execution_applies_kernel_parameter_updates(fake_env):
+    """The child's kernel changes a parameter; node_parameters.json
+    brings it back and it lands on the real node quietly (Current,
+    parameters_updated only). No --node-state flag is involved."""
+    node = _writeback_node(fake_env)
+    p = Pipeline()
+    p.add_node(node)
+    applied, updated = [], []
+    node.parameters_applied.connect(lambda n, c: applied.append(c))
+    node.parameters_updated.connect(lambda n, c: updated.append(c))
+
+    assert p.execute().succeeded() is True
+    assert node.state == NodeState.Current
+    assert node.parameter('frame') == 1
+    assert updated == [{'frame': 1}]
+    assert applied == []
+
+    node.mark_stale()
+    assert p.execute().succeeded() is True
+    assert node.parameter('frame') == 2
+
+
+def test_external_should_auto_execute_applies_kernel_parameter_updates(
+        fake_env):
+    node = _writeback_node(fake_env)
+    executor = node.node_executor
+
+    assert executor.should_auto_execute(node) is False
+    assert node.parameter('mode') == 'slow'
+
+    node.set_parameters(frame=2)
+    assert executor.should_auto_execute(node) is True
+    assert node.parameter('frame') == 2
+
+
 # ---- ProgressReader message parsing -----------------------------------------
 
 

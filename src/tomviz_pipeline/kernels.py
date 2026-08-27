@@ -71,6 +71,13 @@ class Kernel:
     its values JSON-serializable (bool/int/float/str, lists and
     string-keyed dicts thereof); anything else is dropped with a
     warning when the framework collects the dict after a run.
+
+    :meth:`set_parameter` lets the kernel write back to the node's own
+    parameters (the values it receives as keyword arguments) — e.g. a
+    reader advancing a frame index, or an algorithm publishing the
+    threshold it auto-detected so the user sees it in the parameter
+    panel. Changes are collected after the user method returns and
+    installed on the node; see the method for the exact semantics.
     """
 
     def __new__(cls, *args, **kwargs):
@@ -81,6 +88,15 @@ class Kernel:
         # replaces it with the node's persistent bag before calling
         # produce/transform/should_auto_execute.
         obj.state = {}
+        # Parameter write-back plumbing. The runtime fills
+        # _parameter_spec (name -> description entry) and
+        # _parameter_values (current values) before calling the user
+        # method and collects _parameter_updates afterwards. With no
+        # spec installed (a host that predates the feature) updates
+        # are accepted unvalidated and go nowhere.
+        obj._parameter_spec = None
+        obj._parameter_values = {}
+        obj._parameter_updates = {}
         return obj
 
     @property
@@ -117,6 +133,48 @@ class Kernel:
         """
         return False
 
+    def parameter(self, name: str, default=None):
+        """Current value of the node parameter ``name`` as this kernel
+        sees it: the value passed as a keyword argument, or the one most
+        recently given to :meth:`set_parameter` during this call."""
+        return self._parameter_values.get(name, default)
+
+    def set_parameter(self, name: str, value):
+        """Change the value of one of the node's parameters.
+
+        ``name`` must be a parameter declared in the operator JSON
+        description; anything else raises ``ValueError``. ``value`` is
+        coerced to the declared type (``double`` → float, ``int`` →
+        int, ``bool`` → bool, string-like types → str, ``enumeration``
+        → one of the declared option values) and rejected with
+        ``ValueError`` when it can't be.
+
+        Updates are collected when the user method returns (even when
+        it raised) and installed on the node. The run that made the
+        change is deemed to have consumed the new value: nothing is
+        marked stale and no re-execution is triggered — the node's
+        next run simply receives the new value, and an application is
+        notified through the node's ``parameters_updated`` signal so it
+        can refresh its parameter UI. Inside
+        :meth:`should_auto_execute` the return value alone decides
+        whether a re-run happens; return ``True`` to have the node run
+        with the values you just set.
+
+        Updates cross the external-execution boundary the same way
+        ``self.state`` does. They are not applied when the kernel runs
+        inside a tomviz application build that predates the feature.
+        """
+        spec = self._parameter_spec
+        if spec is not None:
+            if name not in spec:
+                declared = ', '.join(sorted(spec)) or '(none)'
+                raise ValueError(
+                    f"'{name}' is not a parameter of this node; the "
+                    f'description declares: {declared}')
+            value = _coerce_parameter_value(name, spec[name], value)
+        self._parameter_updates[name] = value
+        self._parameter_values[name] = value
+
     @staticmethod
     def create_dataset() -> 'Dataset':  # noqa: F821
         """Return a new empty :class:`tomviz_pipeline.dataset.Dataset`.
@@ -128,6 +186,41 @@ class Kernel:
         """
         from tomviz_pipeline.dataset import Dataset
         return Dataset()
+
+
+def _coerce_parameter_value(name: str, param: dict, value):
+    """Coerce ``value`` to the type ``param`` (an entry of the
+    description's ``parameters`` array) declares, raising
+    ``ValueError`` when it doesn't fit. Values are always left
+    JSON-serializable. Distinct from the backend's default coercion:
+    an enumeration's *default* is an option index, while its runtime
+    value is the option's value."""
+    ptype = param.get('type', '')
+    try:
+        if ptype == 'enumeration':
+            options = param.get('options') or []
+            allowed = [next(iter(opt.values())) for opt in options
+                       if isinstance(opt, dict) and opt]
+            if value not in allowed:
+                raise ValueError(
+                    f'{value!r} is not one of the declared options '
+                    f'{allowed}')
+            return value
+        if isinstance(value, (list, tuple)):
+            return list(value)
+        if ptype == 'double':
+            return float(value)
+        if ptype in ('int', 'integer'):
+            return int(value)
+        if ptype in ('bool', 'boolean'):
+            return bool(value)
+        if ptype in ('string', 'file', 'save_file', 'directory'):
+            return str(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"parameter '{name}' ({ptype}) cannot take {value!r}: "
+            f'{exc}') from None
+    return value
 
 
 class SourceKernel(Kernel):

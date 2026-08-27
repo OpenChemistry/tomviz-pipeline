@@ -643,6 +643,258 @@ def test_run_without_node_state_writes_no_sidecar(tmp_path):
     assert not (out / 'node_state.json').exists()
 
 
+# ============================================================
+# Kernel parameter write-back: self.set_parameter
+# ============================================================
+
+
+_WRITEBACK_DESCRIPTION = json.dumps({
+    'name': 'WriteBack',
+    'outputs': [{'name': 'volume', 'type': 'ImageData'}],
+    'parameters': [
+        {'name': 'value', 'type': 'double', 'default': 0.0},
+        {'name': 'frame', 'type': 'int', 'default': 0},
+        {'name': 'mode', 'type': 'enumeration', 'default': 0,
+         'options': [{'Fast': 'fast'}, {'Slow': 'slow'}]},
+        {'name': 'path', 'type': 'file', 'default': ''},
+    ],
+})
+
+_WRITEBACK_SCRIPT = """
+import numpy as np
+from tomviz_pipeline.dataset import Dataset
+from tomviz_pipeline.kernels import SourceKernel
+
+
+class WriteBack(SourceKernel):
+    def produce(self, value=0.0, frame=0, mode='fast', path=''):
+        self.set_parameter('frame', frame + 1)
+        self.set_parameter('value', '2.5')
+        if self.parameter('frame') != frame + 1:
+            raise AssertionError('parameter() does not see the update')
+        arr = np.full((2, 2, 2), value, dtype=np.float32)
+        return {'volume': Dataset({'Scalars': arr}, active='Scalars')}
+
+    def should_auto_execute(self, value=0.0, frame=0, mode='fast',
+                            path=''):
+        self.set_parameter('mode', 'slow')
+        return frame >= 1
+"""
+
+
+def _writeback_source():
+    source = PythonSource()
+    source.set_json_description(_WRITEBACK_DESCRIPTION)
+    source.script = _WRITEBACK_SCRIPT
+    return source
+
+
+def _writeback_state_file(tmp_path, arguments=None):
+    state = {
+        'schemaVersion': 2,
+        'pipeline': {
+            'nextNodeId': 2,
+            'nodes': [{
+                'id': 1,
+                'type': 'source.python',
+                'label': 'WriteBack',
+                'description': _WRITEBACK_DESCRIPTION,
+                'script': _WRITEBACK_SCRIPT,
+                'arguments': arguments or {},
+            }],
+            'links': [],
+        },
+    }
+    path = tmp_path / 'state.tvsm'
+    path.write_text(json.dumps(state))
+    return path
+
+
+def test_set_parameter_lands_on_node_without_staleness():
+    """Updates made in produce() are installed once it returns — the
+    quiet way: the node ends Current, parameters_updated fires with
+    the values that actually changed, parameters_applied never does
+    (that one re-executes the pipeline under auto_execute)."""
+    from tomviz_pipeline.core import NodeState, Pipeline
+
+    source = _writeback_source()
+    pipeline = Pipeline()
+    pipeline.add_node(source)
+    applied, updated = [], []
+    source.parameters_applied.connect(lambda n, c: applied.append(c))
+    source.parameters_updated.connect(lambda n, c: updated.append(c))
+
+    assert pipeline.execute().succeeded() is True
+    assert source.state == NodeState.Current
+    assert source.parameter('frame') == 1
+    assert source.parameter('value') == 2.5
+    assert updated == [{'frame': 1, 'value': 2.5}]
+    assert applied == []
+
+    # The next run receives the new values; an unchanged value (2.5
+    # again) is not reported a second time.
+    assert source.execute() is True
+    assert source.parameter('frame') == 2
+    assert updated[-1] == {'frame': 2}
+    assert source.serialize()['arguments'] == {
+        'value': 2.5, 'frame': 2, 'mode': 'fast', 'path': ''}
+
+
+def test_set_parameter_under_threaded_executor_with_auto_execute():
+    """The hazard the quiet path exists for: with pipeline.auto_execute
+    on and a ThreadedExecutor, a write-back from inside produce() must
+    neither cancel the run in flight (a new execute() replaces the
+    current one) nor queue another run."""
+    import time
+
+    from tomviz_pipeline import ThreadedExecutor
+    from tomviz_pipeline.core import NodeState, Pipeline
+
+    source = _writeback_source()
+    pipeline = Pipeline()
+    executor = ThreadedExecutor()
+    pipeline.set_executor(executor)
+    pipeline.add_node(source)
+    pipeline.auto_execute = True
+    started = []
+    executor.node_execution_started.connect(lambda n: started.append(n))
+
+    future = pipeline.execute()
+    assert future.wait(10) is True
+    assert future.succeeded() is True
+    assert future.was_canceled() is False
+    # Give a (wrongly) triggered follow-up run a chance to show up.
+    time.sleep(0.2)
+    assert pipeline.is_executing() is False
+    assert started == [source]
+    assert source.state == NodeState.Current
+    assert source.parameter('frame') == 1
+
+
+def test_set_parameter_in_should_auto_execute():
+    """The hook may change parameters too; the return value alone
+    decides whether a re-run happens."""
+    from tomviz_pipeline.core import NodeState
+
+    source = _writeback_source()
+    updated = []
+    source.parameters_updated.connect(lambda n, c: updated.append(c))
+
+    assert source.query_should_auto_execute() is False
+    assert source.parameter('mode') == 'slow'
+    assert updated == [{'mode': 'slow'}]
+    assert source.state == NodeState.New
+
+    source.set_parameters(frame=3)
+    assert source.query_should_auto_execute() is True
+    assert updated == [{'mode': 'slow'}]
+
+
+def test_set_parameter_unknown_name_fails_the_run_keeps_earlier_updates():
+    from tomviz_pipeline import PythonNode
+    from tomviz_pipeline.kernels import SourceKernel
+
+    class Bad(SourceKernel):
+        def produce(self, value=0.0, frame=0, mode='fast', path=''):
+            self.set_parameter('frame', 5)
+            self.set_parameter('nope', 1)
+            return {'volume': Dataset(
+                {'a': np.zeros((2, 2, 2), dtype=np.float32)}, 'a')}
+
+    node = PythonNode(json.loads(_WRITEBACK_DESCRIPTION), kernel=Bad)
+    assert node.execute() is False
+    # Harvested in a finally, like self.state.
+    assert node.parameter('frame') == 5
+    assert 'nope' not in node.parameters
+
+
+def test_set_parameter_coerces_to_declared_type():
+    from tomviz_pipeline.kernels import SourceKernel
+
+    kernel = SourceKernel()
+    kernel._parameter_spec = {
+        p['name']: p
+        for p in json.loads(_WRITEBACK_DESCRIPTION)['parameters']}
+
+    kernel.set_parameter('value', '3')
+    kernel.set_parameter('frame', 2.0)
+    kernel.set_parameter('path', 7)
+    kernel.set_parameter('mode', 'slow')
+    assert kernel._parameter_updates == {
+        'value': 3.0, 'frame': 2, 'path': '7', 'mode': 'slow'}
+    assert kernel.parameter('frame') == 2
+    assert kernel.parameter('missing', 'dflt') == 'dflt'
+
+    with pytest.raises(ValueError, match='not one of the declared'):
+        kernel.set_parameter('mode', 'medium')
+    with pytest.raises(ValueError, match="'value' \\(double\\)"):
+        kernel.set_parameter('value', 'abc')
+    with pytest.raises(ValueError, match='not a parameter'):
+        kernel.set_parameter('nope', 1)
+    assert 'nope' not in kernel._parameter_updates
+
+
+def test_set_parameter_without_spec_is_accepted_unvalidated():
+    """A host that predates the feature (e.g. an older tomviz build)
+    installs no spec: calls must not blow up the user's script."""
+    from tomviz_pipeline.kernels import SourceKernel
+
+    kernel = SourceKernel()
+    kernel.set_parameter('anything', object)
+    assert kernel._parameter_updates == {'anything': object}
+
+
+def test_apply_parameter_updates_is_quiet():
+    from tomviz_pipeline.core import NodeState
+
+    source = _writeback_source()
+    source._state = NodeState.Current
+    applied, updated = [], []
+    source.parameters_applied.connect(lambda n, c: applied.append(c))
+    source.parameters_updated.connect(lambda n, c: updated.append(c))
+
+    source.apply_parameter_updates({'frame': 0, 'value': 1.0})
+    assert source.state == NodeState.Current
+    assert source.parameter('value') == 1.0
+    assert updated == [{'value': 1.0}]
+    assert applied == []
+
+    source.apply_parameter_updates({'value': 1.0})
+    assert updated == [{'value': 1.0}]
+
+
+def test_run_writes_node_parameters_file(tmp_path):
+    from tomviz_pipeline.runner import run
+
+    state_path = _writeback_state_file(tmp_path, {'frame': 4})
+    out = tmp_path / 'out'
+    run(state_path, out, output_format='port')
+
+    changes = json.loads((out / 'node_parameters.json').read_text())
+    assert changes == {'nodes': {'1': {'frame': 5, 'value': 2.5}}}
+    # The feature needs no CLI flag: the state sidecar stays opt-in.
+    assert not (out / 'node_state.json').exists()
+
+
+def test_run_without_parameter_changes_writes_no_parameters_file(tmp_path):
+    from tomviz_pipeline.runner import run
+
+    state_path = _watcher_state_file(tmp_path)
+    out = tmp_path / 'out'
+    run(state_path, out, output_format='port')
+    assert not (out / 'node_parameters.json').exists()
+
+
+def test_check_auto_execute_writes_node_parameters_file(tmp_path):
+    from tomviz_pipeline.runner import check_auto_execute
+
+    state_path = _writeback_state_file(tmp_path)
+    out = tmp_path / 'out'
+    assert check_auto_execute(state_path, out, 1) is False
+    changes = json.loads((out / 'node_parameters.json').read_text())
+    assert changes == {'nodes': {'1': {'mode': 'slow'}}}
+
+
 _MULTIPLY_LEGACY_ALIAS_SCRIPT = """
 import tomviz.nodes
 

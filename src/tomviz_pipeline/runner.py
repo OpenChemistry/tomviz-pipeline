@@ -160,6 +160,7 @@ def run(
 
     pipeline = load_state(state_path)
     _apply_node_states(pipeline, node_state_file)
+    parameter_updates = _track_parameter_updates(pipeline)
 
     target_nodes, expanded, runs_count = _resolve_overrides(pipeline, inputs)
 
@@ -242,6 +243,7 @@ def run(
     # reads the file otherwise.
     if node_state_file is not None:
         _write_node_states(pipeline, output_dir)
+    _write_node_parameters(parameter_updates, output_dir)
 
     return written_dirs
 
@@ -257,10 +259,12 @@ def check_auto_execute(state_path, output_dir, node_id: int,
     ``<output_dir>/auto_execute.json`` (``{"shouldExecute": bool}``)
     with the verdict, and ``<output_dir>/node_state.json`` with every
     node's updated ``user_state`` bag so the caller can round-trip
-    state mutations the hook made. An unknown node id answers
-    ``False``."""
+    state mutations the hook made (plus ``node_parameters.json`` when
+    the hook changed parameters, see ``_write_node_parameters``). An
+    unknown node id answers ``False``."""
     pipeline = load_state(state_path)
     _apply_node_states(pipeline, node_state_file)
+    parameter_updates = _track_parameter_updates(pipeline)
 
     should = False
     node = pipeline.node_by_id(node_id)
@@ -273,6 +277,7 @@ def check_auto_execute(state_path, output_dir, node_id: int,
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     _write_node_states(pipeline, out_dir)
+    _write_node_parameters(parameter_updates, out_dir)
     with open(out_dir / 'auto_execute.json', 'w', encoding='utf-8') as f:
         json.dump({'shouldExecute': should}, f)
     return should
@@ -320,6 +325,51 @@ def _write_node_states(pipeline: Pipeline, out_dir) -> None:
         states[str(node.id)] = state
     with open(Path(out_dir) / 'node_state.json', 'w', encoding='utf-8') as f:
         json.dump({'nodes': states}, f)
+
+
+def _track_parameter_updates(pipeline: Pipeline) -> dict:
+    """Return a ``{node_id: {name: value}}`` dict that accumulates every
+    ``parameters_updated`` emission from the pipeline's nodes — the
+    parameter changes kernels make through ``self.set_parameter``. Later
+    updates overwrite earlier ones, so across a multi-run batch the
+    dict holds the final values."""
+    updates: dict[int, dict] = {}
+
+    def on_updated(node, changed):
+        updates.setdefault(node.id, {}).update(changed)
+
+    for node in pipeline.nodes:
+        node.parameters_updated.connect(on_updated)
+    return updates
+
+
+def _write_node_parameters(updates: dict, out_dir) -> None:
+    """Write the parameter changes kernels made (see
+    ``_track_parameter_updates``) to ``<out_dir>/node_parameters.json``
+    in the ``{"nodes": {"<id>": {name: value}}}`` shape the external
+    node executor reads back. Written only when something changed, so
+    parents that don't know the file never see it and runs that don't
+    use the feature leave no trace."""
+    if not updates:
+        return
+    nodes = {}
+    for node_id, changed in updates.items():
+        try:
+            json.dumps(changed)
+        except (TypeError, ValueError):
+            # Defensive: set_parameter coerces to JSON types, but any
+            # host code may call apply_parameter_updates directly.
+            logger.error(
+                'Node %s parameter updates are not JSON-serializable; '
+                'dropping them from node_parameters.json.', node_id)
+            continue
+        nodes[str(node_id)] = changed
+    if not nodes:
+        return
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    with open(out / 'node_parameters.json', 'w', encoding='utf-8') as f:
+        json.dump({'nodes': nodes}, f)
 
 
 def _patch_state(raw_state: dict, per_run_files: dict) -> dict:

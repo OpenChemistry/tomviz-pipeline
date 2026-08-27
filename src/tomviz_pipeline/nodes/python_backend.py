@@ -110,6 +110,9 @@ class PythonNodeBackend:
         self.parameters: dict[str, Any] = {}
         self._parameter_types: dict[str, str] = {}
         self._enum_options: dict[str, list] = {}
+        # name -> the description's parameter entry, verbatim. Handed to
+        # kernels so self.set_parameter() can validate against it.
+        self._parameter_specs: dict[str, dict] = {}
 
     # ---- accessors ----------------------------------------------------
 
@@ -143,6 +146,7 @@ class PythonNodeBackend:
         self.parameters = {}
         self._parameter_types = {}
         self._enum_options = {}
+        self._parameter_specs = {}
 
         if not self.json_description:
             return
@@ -187,6 +191,7 @@ class PythonNodeBackend:
             if not name:
                 continue
             self._parameter_types[name] = ptype
+            self._parameter_specs[name] = dict(param)
             if ptype == 'enumeration':
                 options = param.get('options') or []
                 self._enum_options[name] = options
@@ -313,6 +318,7 @@ class PythonNodeBackend:
             instance._operator_wrapper = OperatorWrapper(None, node=host)
 
         self._inject_state(host, instance)
+        self._inject_parameter_api(instance)
 
         kwargs = dict(self.parameters)
 
@@ -333,6 +339,7 @@ class PythonNodeBackend:
             return {}
         finally:
             self._harvest_state(host, instance)
+            self._harvest_parameter_updates(host, instance)
 
         # None is the documented signal for "cancel or error" per
         # tomviz_pipeline.kernels — the user's transform/produce
@@ -361,6 +368,7 @@ class PythonNodeBackend:
         instance = user_class()
         instance._operator_wrapper = OperatorWrapper(None, node=host)
         self._inject_state(host, instance)
+        self._inject_parameter_api(instance)
 
         method = getattr(instance, 'should_auto_execute', None)
         if not callable(method):
@@ -374,6 +382,7 @@ class PythonNodeBackend:
             return False
         finally:
             self._harvest_state(host, instance)
+            self._harvest_parameter_updates(host, instance)
         return bool(result)
 
     @staticmethod
@@ -406,6 +415,30 @@ class PythonNodeBackend:
             logger.warning(
                 'self.state must be a dict; ignoring the %s it was '
                 'rebound to', type(state).__name__)
+
+    def _inject_parameter_api(self, instance):
+        """Give the user instance what ``self.set_parameter`` /
+        ``self.parameter`` need: the declared parameter specs (for
+        validation and coercion) and the current values. Nothing is
+        shared with the backend — updates are collected afterwards by
+        ``_harvest_parameter_updates``."""
+        instance._parameter_spec = dict(self._parameter_specs)
+        instance._parameter_values = dict(self.parameters)
+        instance._parameter_updates = {}
+
+    @staticmethod
+    def _harvest_parameter_updates(host, instance):
+        """Install the parameter values the kernel changed through
+        ``self.set_parameter`` on the host node — quietly (no staleness,
+        no ``parameters_applied``), see ``Node.apply_parameter_updates``.
+        Runs even when the user method raised, mirroring
+        ``_harvest_state``."""
+        updates = getattr(instance, '_parameter_updates', None)
+        if not isinstance(updates, dict) or not updates:
+            return
+        apply = getattr(host, 'apply_parameter_updates', None)
+        if callable(apply):
+            apply(updates)
 
     def _load_script_module(self):
         """Materialize self.script as a temp .py and import it. Returns

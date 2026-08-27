@@ -30,6 +30,10 @@ rides a JSON sidecar in both directions (``--node-state`` in,
 ``out/node_state.json`` back), and the periodic-execution poll
 (``should_auto_execute``) spawns the same CLI in ``--check-auto-execute``
 mode so the hook runs with the imports the child environment has.
+Parameter values a kernel changes through ``self.set_parameter`` come
+back in ``out/node_parameters.json`` (written by the child only when
+something changed; same ``{"nodes": {"<id>": {...}}}`` shape) and are
+installed on the real node through ``Node.apply_parameter_updates``.
 """
 
 from __future__ import annotations
@@ -88,6 +92,21 @@ def _apply_node_state_file(node, node_id: int, path: Path):
     entry = (data.get('nodes') or {}).get(str(node_id))
     if isinstance(entry, dict):
         node.user_state = entry
+
+
+def _apply_node_parameters_file(node, node_id: int, path: Path):
+    """Install the parameter changes the child's kernel made — the entry
+    for ``node_id`` in the ``node_parameters.json`` the CLI wrote — on
+    ``node``, the quiet way (``Node.apply_parameter_updates``: no
+    staleness, no re-execution). A missing file or entry is a no-op: the
+    kernel changed nothing, or the env's package predates the file."""
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return
+    entry = (data.get('nodes') or {}).get(str(node_id))
+    if isinstance(entry, dict) and entry:
+        node.apply_parameter_updates(entry)
 
 
 class ProgressReader:
@@ -632,6 +651,8 @@ class ExternalNodeExecutor(NodeExecutor):
         if pass_node_state:
             _apply_node_state_file(node, target_id,
                                    out_dir / 'node_state.json')
+        _apply_node_parameters_file(node, target_id,
+                                    out_dir / 'node_parameters.json')
 
         if node.is_cancel_requested():
             return False
@@ -718,8 +739,10 @@ class ExternalNodeExecutor(NodeExecutor):
                          completed.stderr.decode('utf-8', 'replace').strip())
 
         # State mutations made by the hook count even when it answered
-        # "no".
+        # "no"; so do parameter changes.
         _apply_node_state_file(node, target_id, out_dir / 'node_state.json')
+        _apply_node_parameters_file(node, target_id,
+                                    out_dir / 'node_parameters.json')
 
         if completed.returncode != 0:
             logger.warning(

@@ -406,6 +406,9 @@ class Node:
     Signals:
       state_changed(node, NodeState)
       exec_state_changed(node, NodeExecState)
+      parameters_applied(node, changed) — set_parameters() was called
+      parameters_updated(node, changed) — the node's own implementation
+        changed parameter values during a run (apply_parameter_updates)
     """
 
     type_name: str = ''
@@ -456,6 +459,7 @@ class Node:
         self.state_changed = Signal('state_changed')
         self.exec_state_changed = Signal('exec_state_changed')
         self.parameters_applied = Signal('parameters_applied')
+        self.parameters_updated = Signal('parameters_updated')
         self.progress_maximum_changed = Signal('progress_maximum_changed')
         self.progress_step_changed = Signal('progress_step_changed')
         self.progress_message_changed = Signal('progress_message_changed')
@@ -528,6 +532,32 @@ class Node:
         self._parameter_store().update(params)
         self.mark_stale()
         self.parameters_applied.emit(self, dict(params))
+
+    def apply_parameter_updates(self, updates: Mapping):
+        """Install parameter values the node's *own implementation*
+        changed while running — a schema-v2 kernel's
+        ``self.set_parameter()`` — and emit
+        ``parameters_updated(node, changed)`` for values that actually
+        differ.
+
+        Deliberately the quiet counterpart of set_parameters(): nothing
+        is marked stale and ``parameters_applied`` is not emitted. The
+        run that made the change is deemed to have consumed the new
+        values, and a re-execution request from inside a run would
+        cancel that very run under ThreadedExecutor (and re-enter
+        execute() through Pipeline.auto_execute). An application
+        connects ``parameters_updated`` to refresh its parameter UI; a
+        periodic-execution hook that wants its new values used returns
+        True from should_auto_execute."""
+        store = self._parameter_store()
+        changed = {
+            name: value for name, value in updates.items()
+            if name not in store or store[name] != value
+        }
+        if not changed:
+            return
+        store.update(changed)
+        self.parameters_updated.emit(self, dict(changed))
 
     # ---- ports -----------------------------------------------------------
 

@@ -142,6 +142,17 @@ Notes on the kernel side:
   so an external node is asked inside its own environment — and
   re-executes the pipeline on `True`. The hook receives the node's
   parameters and shares `self.state` with `produce` / `transform`.
+- A kernel can write back to its own parameters with
+  `self.set_parameter(name, value)` (the name must be declared in the
+  description; the value is coerced to the declared type). Updates are
+  installed on the node when the method returns — quietly: nothing is
+  marked stale and no re-execution is triggered, because the run that
+  made the change is deemed to have consumed it — and surface as the
+  node's `parameters_updated(node, changed)` signal so an application
+  can refresh its parameter UI. The next run receives the new values;
+  inside `should_auto_execute`, return `True` to run with them right
+  away. Updates round-trip through external execution like
+  `self.state` does.
 - Older operator scripts that import `tomviz.nodes` (the historical
   spelling, `tomviz.nodes.TransformNode`) keep working: those names
   resolve to the kernel classes through a compatibility alias.
@@ -160,6 +171,10 @@ pipeline.execute()                  # re-runs just what's needed
 pipeline.auto_execute = True        # optional: C++-style behavior where
 scale.set_parameters(factor=4)      # applying parameters re-executes
 ```
+
+Values a kernel writes back with `self.set_parameter` (see above) take
+the other door, `apply_parameter_updates()`: the store changes, nothing
+is marked stale, and only `parameters_updated` is emitted.
 
 ## Using it from an application
 
