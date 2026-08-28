@@ -51,6 +51,8 @@ those names to these same classes.
 
 from __future__ import annotations
 
+import math
+
 from tomviz_pipeline.operators import Progress
 
 
@@ -207,9 +209,17 @@ def _coerce_parameter_value(name: str, param: dict, value):
                     f'{allowed}')
             return value
         if isinstance(value, (list, tuple)):
+            if ptype in ('double', 'int', 'integer', 'bool', 'boolean',
+                         'string', 'file', 'save_file', 'directory'):
+                raise ValueError('a list cannot be assigned to a '
+                                 f'{ptype} parameter')
             return list(value)
         if ptype == 'double':
-            return float(value)
+            value = float(value)
+            if not math.isfinite(value):
+                # NaN/inf would break the JSON transport of write-backs
+                raise ValueError('value must be finite')
+            return value
         if ptype in ('int', 'integer'):
             return int(value)
         if ptype in ('bool', 'boolean'):

@@ -833,6 +833,16 @@ def test_set_parameter_coerces_to_declared_type():
         kernel.set_parameter('nope', 1)
     assert 'nope' not in kernel._parameter_updates
 
+    # Non-finite doubles would break the strict-JSON transport of
+    # write-backs, and a list is not a scalar.
+    with pytest.raises(ValueError, match='finite'):
+        kernel.set_parameter('value', float('nan'))
+    with pytest.raises(ValueError, match='finite'):
+        kernel.set_parameter('value', float('inf'))
+    with pytest.raises(ValueError, match='list'):
+        kernel.set_parameter('value', [1.0, 2.0])
+    assert kernel._parameter_updates['value'] == 3.0
+
 
 def test_set_parameter_without_spec_is_accepted_unvalidated():
     """A host that predates the feature (e.g. an older tomviz build)

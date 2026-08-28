@@ -315,12 +315,14 @@ def _write_node_states(pipeline: Pipeline, out_dir) -> None:
         if not state:
             continue
         try:
-            json.dumps(state)
+            # allow_nan=False: NaN/inf would serialize as non-strict
+            # JSON that the parent's RFC-strict parser rejects wholesale.
+            json.dumps(state, allow_nan=False)
         except (TypeError, ValueError):
             logger.error(
                 'Node %s user state is not JSON-serializable; dropping '
                 'it from node_state.json. Keep self.state values to '
-                'bool/int/float/str, lists, and dicts.', node.id)
+                'finite bool/int/float/str, lists, and dicts.', node.id)
             continue
         states[str(node.id)] = state
     with open(Path(out_dir) / 'node_state.json', 'w', encoding='utf-8') as f:
@@ -355,7 +357,7 @@ def _write_node_parameters(updates: dict, out_dir) -> None:
     nodes = {}
     for node_id, changed in updates.items():
         try:
-            json.dumps(changed)
+            json.dumps(changed, allow_nan=False)
         except (TypeError, ValueError):
             # Defensive: set_parameter coerces to JSON types, but any
             # host code may call apply_parameter_updates directly.
