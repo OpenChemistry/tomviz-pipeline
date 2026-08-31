@@ -45,7 +45,7 @@ from .core import (  # noqa: F401
     set_port_data_serializer,
 )
 
-__version__ = '3.1.3'
+__version__ = '3.1.4'
 
 # Lazily resolved tomviz-layer exports: name -> (module, attribute).
 _LAZY = {
