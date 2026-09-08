@@ -25,13 +25,60 @@ class OperatorWrapper(object):
     When a graph `node` is supplied, the getters also reflect its
     in-process cancel / complete events, so ThreadedExecutor.cancel()
     reaches operators that poll these flags even when no parent-process
-    control channel exists."""
+    control channel exists.
+
+    It also backs the `Progress` object every operator and kernel
+    carries (`tomviz_pipeline.operators.Progress` reads and writes the
+    `progress_*` attributes) when the executor installed no progress
+    reporter of its own. With a `node` attached the values drive the
+    node's progress API, so in-process observers see them through the
+    node's signals."""
 
     def __init__(self, control_channel=None, node=None):
         self._channel = control_channel
         self._node = node
         self._canceled = False
         self._completed = False
+        self._progress_maximum = 0
+        self._progress_value = 0
+        self._progress_message = ''
+        # `progress.data = X` previews (the desktop app renders them;
+        # this runtime only keeps the last value).
+        self.progress_data = None
+
+    # ---- progress ------------------------------------------------------
+
+    @property
+    def progress_maximum(self) -> int:
+        return self._progress_maximum
+
+    @progress_maximum.setter
+    def progress_maximum(self, value: int):
+        self._progress_maximum = int(value)
+        if self._node is not None:
+            self._node.set_total_progress_steps(self._progress_maximum)
+
+    @property
+    def progress_value(self) -> int:
+        return self._progress_value
+
+    @progress_value.setter
+    def progress_value(self, value: int):
+        self._progress_value = int(value)
+        if self._node is not None:
+            self._node.set_progress_step(self._progress_value)
+
+    @property
+    def progress_message(self) -> str:
+        return self._progress_message
+
+    @progress_message.setter
+    def progress_message(self, message: str):
+        self._progress_message = str(message)
+        if self._node is not None:
+            self._node.set_progress_message(self._progress_message)
+
+    # ---- cancel / complete ---------------------------------------------
 
     @property
     def canceled(self) -> bool:

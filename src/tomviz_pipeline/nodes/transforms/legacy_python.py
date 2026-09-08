@@ -264,13 +264,17 @@ class LegacyPythonTransform(TransformNode):
 
         # Wire progress + cancel/complete onto the operator instance.
         # `self.progress.value = ...` routes to the runtime's progress
-        # reporter; `self.canceled` / `self.completed` lazily check
-        # the parent → child control channel exposed by the same
-        # progress object (None for tqdm; socket/files otherwise) OR'd
-        # with this node's in-process cancel / complete flags so
-        # ThreadedExecutor.cancel() reaches polling operators too.
+        # reporter when the executor installed one; otherwise the
+        # operator keeps its own Progress, which the wrapper backs and
+        # forwards to this node's progress API. `self.canceled` /
+        # `self.completed` lazily check the parent → child control
+        # channel exposed by the reporter (None for tqdm; socket/files
+        # otherwise) OR'd with this node's in-process cancel / complete
+        # flags so ThreadedExecutor.cancel() reaches polling operators
+        # too.
         if hasattr(transform_fn, '__self__'):
-            transform_fn.__self__.progress = self.progress
+            if self.progress is not None:
+                transform_fn.__self__.progress = self.progress
             channel = (self.progress.control_channel()
                        if self.progress is not None else None)
             transform_fn.__self__._operator_wrapper = OperatorWrapper(

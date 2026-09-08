@@ -847,6 +847,12 @@ class TransformNode(Node):
         result = self.transform(inputs)
         if result is None:
             return False
+        if not result and self._output_ports:
+            # Implementations report a raised or refusing transform as an
+            # empty result; a node with declared outputs that produced
+            # none did not succeed, and must not be marked Current with
+            # stale or missing port data for its downstream to trip on.
+            return False
 
         for name, data in result.items():
             port = self.output_port(name)

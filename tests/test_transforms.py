@@ -359,3 +359,47 @@ def test_cylindrical_crop_custom_axis():
     assert out[0, 5, 5] == 1.0
     # Corner of YZ face should be zeroed
     assert out[0, 0, 0] == 0.0
+
+
+# ---- legacy operator progress without a runtime reporter ------------------
+
+PROGRESS_OPERATOR_DESCRIPTION = json.dumps({
+    'name': 'ReportProgress',
+    'label': 'Report Progress',
+    'parameters': [],
+    'inputType': 'ImageData',
+    'outputType': 'ImageData',
+})
+
+PROGRESS_OPERATOR_SCRIPT = '''
+import tomviz.operators
+
+
+class ReportProgress(tomviz.operators.Operator):
+    def transform(self, dataset):
+        self.progress.maximum = 2
+        self.progress.value = 1
+        self.progress.message = "half"
+        dataset.active_scalars = dataset.active_scalars + 1
+        self.progress.value = 2
+'''
+
+
+def test_legacy_operator_progress_without_reporter_drives_the_node():
+    """An Operator subclass writing self.progress runs without an
+    executor progress object (the node keeps the operator's own
+    Progress) and the values reach the node's progress API."""
+    t = LegacyPythonTransform()
+    t.deserialize({'description': PROGRESS_OPERATOR_DESCRIPTION,
+                   'script': PROGRESS_OPERATOR_SCRIPT})
+    assert t.progress is None
+
+    ds = Dataset({'ImageScalars': np.zeros((2, 2, 2), dtype=np.float32)},
+                 'ImageScalars')
+    result = t.transform({'volume': PortData(ds, 'ImageData')})
+
+    out = result[t._primary_output_name].payload.active_scalars
+    np.testing.assert_array_equal(out, np.ones((2, 2, 2), dtype=np.float32))
+    assert t.total_progress_steps() == 2
+    assert t.progress_step() == 2
+    assert t.progress_message() == 'half'

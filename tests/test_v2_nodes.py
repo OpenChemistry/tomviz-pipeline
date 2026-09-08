@@ -942,3 +942,92 @@ def test_legacy_nodes_names_are_kernel_classes():
     assert _legacy_nodes.Node is kernels.Kernel
     assert _legacy_nodes.SourceNode is kernels.SourceKernel
     assert _legacy_nodes.TransformNode is kernels.TransformKernel
+
+
+# ============================================================
+# Progress and failure without an executor progress reporter
+# ============================================================
+
+_PROGRESS_V2_SCRIPT = """
+from tomviz_pipeline.kernels import TransformKernel
+
+
+class Report(TransformKernel):
+    def transform(self, inputs, factor=1.0):
+        self.progress.maximum = 3
+        for step in range(3):
+            self.progress.value = step + 1
+        self.progress.message = "done"
+        return {"volume": inputs["volume"]}
+"""
+
+
+def test_python_transform_v2_progress_without_reporter_drives_the_node():
+    """A kernel writing self.progress with no executor progress object
+    installed (node.progress is None) must not fail; the values land on
+    the node's progress API and its signals."""
+    transform = PythonTransform()
+    transform.set_json_description(_multiply_v2_description())
+    transform.script = _PROGRESS_V2_SCRIPT
+    assert transform.progress is None
+
+    steps = []
+    transform.progress_step_changed.connect(
+        lambda node, value: steps.append(value))
+
+    src = Dataset({'a': np.array([1.0])}, active='a')
+    outputs = transform.transform({'volume': PortData(src, 'ImageData')})
+
+    assert 'volume' in outputs
+    assert transform.total_progress_steps() == 3
+    assert transform.progress_step() == 3
+    assert transform.progress_message() == 'done'
+    assert steps == [1, 2, 3]
+
+
+def test_python_transform_v2_exception_fails_the_node_in_a_run():
+    """A raising kernel produces no outputs; the executor must record
+    that as a failure (node Stale, downstream untouched) instead of
+    marking the node Current with no port data."""
+    from tomviz_pipeline import DefaultExecutor, NodeState, Pipeline
+    from tomviz_pipeline.core.node import SourceNode
+
+    class Memory(SourceNode):
+        type_name = 'test.memory'
+
+        def __init__(self):
+            super().__init__()
+            self.add_output('volume', 'ImageData')
+
+        def execute(self):
+            ds = Dataset({'a': np.array([1.0])}, active='a')
+            self.output_port('volume').set_data(PortData(ds, 'ImageData'))
+            return True
+
+    boom = PythonTransform()
+    boom.set_json_description(_multiply_v2_description())
+    boom.script = """
+from tomviz_pipeline.kernels import TransformKernel
+
+class Boom(TransformKernel):
+    def transform(self, inputs, factor=1.0):
+        raise RuntimeError("intentional")
+"""
+    downstream = PythonTransform()
+    downstream.set_json_description(_multiply_v2_description())
+    downstream.script = _MULTIPLY_V2_SCRIPT
+
+    pipeline = Pipeline()
+    source = Memory()
+    for node in (source, boom, downstream):
+        pipeline.add_node(node)
+    pipeline.create_link(source.output_port('volume'),
+                         boom.input_port('volume'))
+    pipeline.create_link(boom.output_port('volume'),
+                         downstream.input_port('volume'))
+
+    assert DefaultExecutor(pipeline).execute() is False
+    assert source.state == NodeState.Current
+    assert boom.state == NodeState.Stale
+    assert boom.output_port('volume').data() is None
+    assert downstream.state != NodeState.Current
