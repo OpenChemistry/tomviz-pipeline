@@ -13,7 +13,8 @@ The package is layered:
 
 - `tomviz_pipeline.core` — a generic, dependency-free (stdlib only)
   pipeline engine: `Pipeline`, `Node` (`SourceNode` / `TransformNode` /
-  `SinkNode`), typed `InputPort` / `OutputPort`, `Link`, `PortData`,
+  `SinkNode` / `SinkGroupNode`), typed `InputPort` / `OutputPort`
+  (`PassthroughOutputPort`), `Link`, `PortData`,
   dirty tracking (`New` / `Stale` / `Current`), execution planning,
   blocking (`DefaultExecutor`) and threaded (`ThreadedExecutor`)
   pipeline executors, `ExecutionFuture`, thread-safe `Signal` /

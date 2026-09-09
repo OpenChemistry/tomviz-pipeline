@@ -16,7 +16,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from tomviz_pipeline.core import SinkNode
+from tomviz_pipeline.core import SinkGroupNode, SinkNode
 from tomviz_pipeline.io.emd import _write_emd_node_into
 from tomviz_pipeline.molecule import Molecule
 from tomviz_pipeline.table import Table
@@ -245,7 +245,9 @@ def write_state_tvh5(target_path, state_json: dict, pipeline) -> None:
     with h5py.File(target_path, 'w') as f:
         f.create_group('/data')
         for node in pipeline.nodes:
-            if isinstance(node, SinkNode):
+            # A sink group's passthrough ports forward the upstream
+            # payload; embedding them would duplicate the data.
+            if isinstance(node, (SinkNode, SinkGroupNode)):
                 continue
             entry = nodes_by_id.get(node.id)
             if entry is None:

@@ -28,24 +28,17 @@ _SINK_TYPES = (
 
 
 class _InertSink(SinkNode):
-    """SinkNode that adopts whatever input AND output ports the saved
-    state declares. The output-port branch is for `sinkGroup` nodes,
-    which on the C++ side are passthrough containers; for the headless
-    runtime we never execute them but downstream links still need their
-    output ports to exist so loading resolves correctly. Real sinks
-    (sink.outline, sink.slice, …) only declare inputPorts in the JSON,
-    so the output branch is a no-op for them."""
+    """SinkNode that adopts whatever input ports the saved state
+    declares. Real sinks (sink.outline, sink.slice, …) only declare
+    inputPorts in the JSON. The `sinkGroup` container that fans one
+    output out to several sinks is core.SinkGroupNode, registered
+    separately."""
 
     def deserialize(self, data: dict) -> bool:
         for name, entry in (data.get('inputPorts') or {}).items():
             if self.input_port(name) is None:
                 accepted = entry.get('type', ['ImageData'])
                 self.add_input(name, accepted)
-        for name, entry in (data.get('outputPorts') or {}).items():
-            if self.output_port(name) is None:
-                self.add_output(
-                    name, entry.get('type', 'ImageData'),
-                    persistent=bool(entry.get('persistent', True)))
         return super().deserialize(data)
 
 

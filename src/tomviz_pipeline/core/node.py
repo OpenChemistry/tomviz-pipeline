@@ -33,6 +33,23 @@ logger = logging.getLogger('tomviz_pipeline')
 DEFAULT_AUTO_EXECUTE_INTERVAL_SECONDS = 30
 
 
+# The image-like port types: every one of them has the base type
+# 'ImageData', which is what a generic image input accepts and what a
+# generic image output declares before inference refines it.
+IMAGE_PORT_TYPES = ('ImageData', 'TiltSeries', 'Volume', 'LabelMap', 'Image')
+
+
+def is_port_type_compatible(port_type: str, accepted_types) -> bool:
+    """Whether an output of ``port_type`` may feed an input accepting
+    ``accepted_types``: an exact match, or an image-like type into an
+    input that accepts 'ImageData' (mirrors the C++ isPortTypeCompatible
+    and its base-type rule)."""
+    accepted = set(accepted_types)
+    if port_type in accepted:
+        return True
+    return port_type in IMAGE_PORT_TYPES and 'ImageData' in accepted
+
+
 class NodeState(enum.Enum):
     """Dirty-tracking state. New = never ran, Stale = inputs or parameters
     changed since the last run, Current = outputs are up to date."""
@@ -130,7 +147,11 @@ class InputPort(Port):
     During plan execution the pipeline executor delivers the upstream
     payload as a PortDataHandle (set_handle) so transient upstream data
     stays alive exactly for the consumers that need it; outside a plan,
-    data() falls back to a non-loading peek through the link."""
+    data() falls back to a non-loading peek through the link.
+
+    Signals:
+      connection_changed(port) — the incoming link was set or cleared
+    """
 
     def __init__(self, name: str, accepted_types):
         if isinstance(accepted_types, str):
@@ -139,6 +160,16 @@ class InputPort(Port):
         super().__init__(name, self.accepted_types[0])
         self.link: Optional[Link] = None
         self._handle: Optional[PortDataHandle] = None
+        self.connection_changed = Signal('connection_changed')
+
+    def set_link(self, link: Optional[Link]):
+        """Install (or clear, with None) the incoming link and emit
+        connection_changed(port). Pipeline.create_link/remove_link call
+        this; mirrors the C++ InputPort::setLink + connectionChanged."""
+        if link is self.link:
+            return
+        self.link = link
+        self.connection_changed.emit(self)
 
     def set_handle(self, handle: Optional[PortDataHandle]):
         self._handle = handle
@@ -185,13 +216,24 @@ class OutputPort(Port):
     on disk); materialize() is the loading read — the payload stays
     alive only while the returned handle is held.
 
+    Types: ``declared_type`` is what the node promises (the state file's
+    ``type``); ``port_type`` is the *effective* type, what actually flows.
+    They differ only for outputs declared 'ImageData' whose node infers
+    the concrete kind (TiltSeries, Volume, ...) from an input, see
+    Node.recompute_effective_types. Assigning ``port_type`` sets both, as
+    the C++ setDeclaredType does.
+
     Signals:
       data_changed(port)
       data_location_changed(port, DataLocation)
+      effective_type_changed(port, type)
     """
 
     def __init__(self, name: str, port_type: str, persistent: bool = True,
                  persistence_mode: PersistenceMode = PersistenceMode.InMemory):
+        self._declared_type = port_type
+        self._effective_type = port_type
+        self.effective_type_changed = Signal('effective_type_changed')
         super().__init__(name, port_type)
         self._persistent = bool(persistent)
         self._mode = persistence_mode
@@ -209,6 +251,40 @@ class OutputPort(Port):
         self.outgoing_links: list[Link] = []
         self.data_changed = Signal('data_changed')
         self.data_location_changed = Signal('data_location_changed')
+
+    # ---- types -----------------------------------------------------------
+
+    @property
+    def declared_type(self) -> str:
+        return self._declared_type
+
+    @property
+    def port_type(self) -> str:
+        """The effective type."""
+        return self._effective_type
+
+    @port_type.setter
+    def port_type(self, value: str):
+        self._declared_type = value
+        self._set_effective_type(value)
+
+    def _set_effective_type(self, value: str):
+        if value == self._effective_type:
+            return
+        self._effective_type = value
+        self.effective_type_changed.emit(self, value)
+        node = getattr(self, 'node', None)
+        if node is not None:
+            node._on_output_type_changed(self)
+
+    # ---- links -----------------------------------------------------------
+
+    def can_accept_link(self, to_port: InputPort) -> bool:
+        """Whether a link from this port to ``to_port`` is allowed;
+        Pipeline.create_link refuses one that is not. The base port
+        accepts any input (type validation is deliberately lax); a
+        PassthroughOutputPort only accepts sinks."""
+        return True
 
     # ---- persistence configuration -------------------------------------
 
@@ -394,9 +470,25 @@ class OutputPort(Port):
 
 
 class Link:
+    """A connection from an output port to an input port. ``valid`` says
+    whether the output's effective type suits the input; an invalid link
+    stays in the graph (a UI marks it) and becomes valid again when
+    upstream types change back. Signal: validity_changed(valid)."""
+
     def __init__(self, from_port: OutputPort, to_port: InputPort):
         self.from_port = from_port
         self.to_port = to_port
+        self.valid = True
+        self.validity_changed = Signal('validity_changed')
+        self.recheck()
+
+    def recheck(self):
+        """Re-evaluate ``valid`` from the current effective types."""
+        valid = is_port_type_compatible(self.from_port.port_type,
+                                        self.to_port.accepted_types)
+        if valid != self.valid:
+            self.valid = valid
+            self.validity_changed.emit(valid)
 
 
 class Node:
@@ -409,6 +501,8 @@ class Node:
       parameters_applied(node, changed) — set_parameters() was called
       parameters_updated(node, changed) — the node's own implementation
         changed parameter values during a run (apply_parameter_updates)
+      output_type_changed(node, port, type) — an output's effective type
+        changed (the Pipeline propagates it downstream)
     """
 
     type_name: str = ''
@@ -460,6 +554,7 @@ class Node:
         self.exec_state_changed = Signal('exec_state_changed')
         self.parameters_applied = Signal('parameters_applied')
         self.parameters_updated = Signal('parameters_updated')
+        self.output_type_changed = Signal('output_type_changed')
         self.progress_maximum_changed = Signal('progress_maximum_changed')
         self.progress_step_changed = Signal('progress_step_changed')
         self.progress_message_changed = Signal('progress_message_changed')
@@ -611,6 +706,36 @@ class Node:
                 return p
         return None
 
+    # ---- type inference --------------------------------------------------
+
+    def set_type_inference_source(self, output_name: str, input_name: str):
+        """Make the output ``output_name`` (declared 'ImageData') take the
+        effective type of whatever feeds the input ``input_name``. Without
+        a mapping, the first input accepting 'ImageData' drives."""
+        self.type_inference_sources[output_name] = input_name
+
+    def recompute_effective_types(self):
+        """Refresh the effective type of every output (mirrors the C++
+        Node::recomputeEffectiveTypes): a concrete declared type is kept;
+        an 'ImageData' output inherits the effective type of the port
+        linked to its driving input, or falls back to 'ImageData'."""
+        for output in self._output_ports:
+            if output.declared_type != 'ImageData':
+                output._set_effective_type(output.declared_type)
+                continue
+            source = self.type_inference_sources.get(output.name)
+            driver = self.input_port(source) if source else None
+            if driver is None:
+                driver = next(
+                    (p for p in self._input_ports
+                     if 'ImageData' in p.accepted_types), None)
+            link = driver.link if driver is not None else None
+            output._set_effective_type(
+                link.from_port.port_type if link is not None else 'ImageData')
+
+    def _on_output_type_changed(self, port: OutputPort):
+        self.output_type_changed.emit(self, port, port.port_type)
+
     def upstream_nodes(self) -> list['Node']:
         nodes: list[Node] = []
         for port in self._input_ports:
@@ -729,7 +854,7 @@ class Node:
             ports = {}
             for port in self._output_ports:
                 entry = {
-                    'type': port.port_type,
+                    'type': port.declared_type,
                     'persistent': port.persistent,
                 }
                 # Written only for persistent OnDisk ports so older

@@ -27,6 +27,11 @@ class Pipeline:
       execution_finished(future)
       paused_changed(bool)
       breakpoint_reached(node)
+      link_validity_changed(link, valid)
+
+    Effective port types (Node.recompute_effective_types) are propagated
+    downstream whenever a link is created or removed and whenever an
+    output's type changes at run time (a reader finding a tilt series).
     """
 
     def __init__(self):
@@ -49,6 +54,8 @@ class Pipeline:
         self.execution_finished = Signal('execution_finished')
         self.paused_changed = Signal('paused_changed')
         self.breakpoint_reached = Signal('breakpoint_reached')
+        self.link_validity_changed = Signal('link_validity_changed')
+        self._type_connections: dict[int, object] = {}
 
     # ---- graph mutation --------------------------------------------------
 
@@ -63,6 +70,8 @@ class Pipeline:
         self.nodes.append(node)
         self._param_connections[id(node)] = node.parameters_applied.connect(
             self._on_node_parameters_applied)
+        self._type_connections[id(node)] = node.output_type_changed.connect(
+            self._on_output_type_changed)
         self.node_added.emit(node)
         return node
 
@@ -77,9 +86,10 @@ class Pipeline:
             for link in list(port.outgoing_links):
                 self.remove_link(link)
         self.nodes.remove(node)
-        connection = self._param_connections.pop(id(node), None)
-        if connection is not None:
-            connection.disconnect()
+        for table in (self._param_connections, self._type_connections):
+            connection = table.pop(id(node), None)
+            if connection is not None:
+                connection.disconnect()
         self.node_removed.emit(node)
 
     def clear(self):
@@ -105,30 +115,77 @@ class Pipeline:
                     to_port: InputPort) -> Link:
         """Connect an output port to an input port. An input port accepts
         a single link: an existing one is replaced. Raises ValueError if
-        the link would create a cycle."""
+        the link would create a cycle or the output port refuses the
+        input (OutputPort.can_accept_link)."""
         if self.would_create_cycle(from_port, to_port):
             raise ValueError('Link would create a cycle')
+        if not from_port.can_accept_link(to_port):
+            raise ValueError(
+                f"Port '{from_port.name}' does not accept a link to "
+                f"'{to_port.name}'")
         if to_port.link is not None:
             self.remove_link(to_port.link)
         link = Link(from_port, to_port)
         from_port.outgoing_links.append(link)
-        to_port.link = link
+        to_port.set_link(link)
         self.links.append(link)
+        link._validity_connection = link.validity_changed.connect(
+            lambda valid, link=link: self.link_validity_changed.emit(
+                link, valid))
         if to_port.node is not None:
             to_port.node.mark_stale()
         self.link_created.emit(link)
+        if to_port.node is not None:
+            self._propagate_effective_types(to_port.node)
         return link
 
     def remove_link(self, link: Link):
         if link in link.from_port.outgoing_links:
             link.from_port.outgoing_links.remove(link)
         if link.to_port.link is link:
-            link.to_port.link = None
+            link.to_port.set_link(None)
         if link in self.links:
             self.links.remove(link)
+        connection = getattr(link, '_validity_connection', None)
+        if connection is not None:
+            connection.disconnect()
         if link.to_port.node is not None:
             link.to_port.node.mark_stale()
         self.link_removed.emit(link)
+        if link.to_port.node is not None:
+            self._propagate_effective_types(link.to_port.node)
+
+    # ---- effective types -------------------------------------------------
+
+    def _propagate_effective_types(self, start: Node):
+        """Recompute the effective types of ``start`` and everything
+        downstream (forward BFS), rechecking the links on the way. Mirrors
+        the C++ Pipeline::propagateEffectiveTypes."""
+        queue = [start]
+        visited: set[int] = set()
+        while queue:
+            node = queue.pop(0)
+            if id(node) in visited:
+                continue
+            visited.add(id(node))
+            node.recompute_effective_types()
+            for output in node.output_ports():
+                for link in output.outgoing_links:
+                    link.recheck()
+                    downstream = link.to_port.node
+                    if downstream is not None and id(downstream) not in visited:
+                        queue.append(downstream)
+
+    def _on_output_type_changed(self, node: Node, port: OutputPort, _type):
+        # A type set from outside inference (a reader typing its output
+        # when it runs): the consumers follow. recompute on `node` itself
+        # is a no-op for a concrete declared type, which such a change is.
+        if not any(n is node for n in self.nodes):
+            return
+        for link in list(port.outgoing_links):
+            link.recheck()
+            if link.to_port.node is not None:
+                self._propagate_effective_types(link.to_port.node)
 
     # ---- topology --------------------------------------------------------
 

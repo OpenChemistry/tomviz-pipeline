@@ -6,7 +6,7 @@
 register_builtins() populates tomviz_pipeline.core.NodeFactory with every
 type string a schema-v2 state file can contain."""
 
-from tomviz_pipeline.core import NodeFactory, SourceNode
+from tomviz_pipeline.core import NodeFactory, SinkGroupNode, SourceNode
 
 __all__ = ['register_builtins']
 
@@ -69,7 +69,8 @@ def register_builtins():
     from tomviz_pipeline.nodes.sinks import _SINK_TYPES, _make_inert_sink
     for t in _SINK_TYPES:
         NodeFactory.register(t, _make_inert_sink)
-    NodeFactory.register('sinkGroup', _make_inert_sink)
+    # Sink groups are real passthrough containers, not placeholders.
+    NodeFactory.register(SinkGroupNode.type_name, SinkGroupNode)
 
     # Per-node executors: 'external' round-trips the {type, envPath}
     # executor block on nodes configured to run in another Python env.

@@ -351,7 +351,10 @@ class PythonNodeBackend:
         outputs: dict[str, PortData] = {}
         for name, ptype, _ in self._outputs:
             if name in result:
-                outputs[name] = PortData(result[name], ptype)
+                # The effective type when the host's port inferred one.
+                port = host.output_port(name) if host is not None else None
+                outputs[name] = PortData(
+                    result[name], port.port_type if port is not None else ptype)
         return outputs
 
     def run_should_auto_execute(self, host) -> bool:

@@ -3,19 +3,23 @@
 # It is released under the 3-Clause BSD License, see "LICENSE".
 ###############################################################################
 """Leaf-detection + per-leaf writing logic shared by the CLI and the
-batch (`run_many`) interface. Sinks are ignored at execution time, so
-the leaves of the graph for output purposes are non-sink nodes whose
-remaining outgoing links all land on sinks."""
+batch (`run_many`) interface. Sinks are ignored at execution time and
+sink groups merely forward data to them, so the leaves of the graph for
+output purposes are the other nodes whose remaining outgoing links all
+land on sinks or sink groups."""
 
 import logging
 import re
 from pathlib import Path
 
-from tomviz_pipeline.core import SinkNode
+from tomviz_pipeline.core import SinkGroupNode, SinkNode
 from tomviz_pipeline.writers import writer_for
 
 
 logger = logging.getLogger('tomviz_pipeline')
+
+# Nodes that produce no output of their own.
+_SINK_LIKE = (SinkNode, SinkGroupNode)
 
 
 def sanitize(name: str) -> str:
@@ -25,16 +29,16 @@ def sanitize(name: str) -> str:
 
 def is_data_leaf(node) -> bool:
     """A node is a data leaf if every one of its outgoing links lands on
-    a sink. A node with zero outgoing links also qualifies. Sinks
-    themselves are never leaves."""
-    if isinstance(node, SinkNode):
+    a sink (or a sink group). A node with zero outgoing links also
+    qualifies. Sinks and groups themselves are never leaves."""
+    if isinstance(node, _SINK_LIKE):
         return False
     for port in node.output_ports():
         for link in port.outgoing_links:
             consumer = link.to_port.node
             if consumer is None:
                 continue
-            if not isinstance(consumer, SinkNode):
+            if not isinstance(consumer, _SINK_LIKE):
                 return False
     return True
 
@@ -45,7 +49,7 @@ def is_unconsumed_port(port) -> bool:
         consumer = link.to_port.node
         if consumer is None:
             continue
-        if not isinstance(consumer, SinkNode):
+        if not isinstance(consumer, _SINK_LIKE):
             return False
     return True
 
@@ -58,7 +62,7 @@ def write_leaf_outputs(pipeline, output_dir: Path) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     written = 0
     for node in pipeline.nodes:
-        if isinstance(node, SinkNode):
+        if isinstance(node, _SINK_LIKE):
             continue
         if not is_data_leaf(node):
             continue

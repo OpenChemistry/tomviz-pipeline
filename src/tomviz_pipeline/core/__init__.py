@@ -17,6 +17,7 @@ from .executor import DefaultExecutor, PipelineExecutor, ThreadedExecutor
 from .factory import NodeFactory
 from .future import ExecutionFuture
 from .node import (
+    IMAGE_PORT_TYPES,
     InputPort,
     Link,
     Node,
@@ -29,6 +30,7 @@ from .node import (
     SinkNode,
     SourceNode,
     TransformNode,
+    is_port_type_compatible,
 )
 from .persistence import (
     DataLocation,
@@ -43,6 +45,7 @@ from .node_executor import (
     NodeExecutorFactory,
 )
 from .pipeline import Pipeline
+from .sink_group import PassthroughOutputPort, SinkGroupNode
 from .state import (
     SCHEMA_VERSION,
     pipeline_from_state_dict,
@@ -56,6 +59,7 @@ __all__ = [
     'DefaultExecutor',
     'EventQueue',
     'ExecutionFuture',
+    'IMAGE_PORT_TYPES',
     'InputPort',
     'InternalNodeExecutor',
     'Link',
@@ -66,6 +70,7 @@ __all__ = [
     'NodeFactory',
     'NodeState',
     'OutputPort',
+    'PassthroughOutputPort',
     'PersistenceMode',
     'Pipeline',
     'PipelineExecutor',
@@ -75,11 +80,13 @@ __all__ = [
     'PortDataHandle',
     'SCHEMA_VERSION',
     'Signal',
+    'SinkGroupNode',
     'SinkNode',
     'SourceNode',
     'ThreadedExecutor',
     'TransformNode',
     'TransformPersistenceDefault',
+    'is_port_type_compatible',
     'pipeline_from_state_dict',
     'pipeline_to_state_dict',
     'set_port_data_serializer',
