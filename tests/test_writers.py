@@ -44,6 +44,25 @@ def _build_methane_molecule() -> Molecule:
     )
 
 
+def test_label_maps_are_written_as_emd(tmp_path):
+    """Segmentation results leave a pipeline on LabelMap ports; they are
+    image data and get the EMD writer like any other volume."""
+    from tomviz_pipeline import Dataset
+    from tomviz_pipeline.io import load_dataset
+
+    entry = writer_for('LabelMap')
+    assert entry is not None
+    extension, writer = entry
+    assert extension == 'emd'
+
+    labels = np.zeros((3, 4, 5), dtype=np.uint8, order='F')
+    labels[1, 2, 3] = 7
+    dataset = Dataset({'Labels': labels}, 'Labels')
+    target = tmp_path / f'labels.{extension}'
+    writer(dataset, target)
+    assert np.array_equal(load_dataset(target).active_scalars, labels)
+
+
 def test_table_csv_round_trip(tmp_path):
     target = tmp_path / 'out.csv'
     write_table_csv(_build_table(), target)

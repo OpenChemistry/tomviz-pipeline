@@ -21,6 +21,10 @@ _REGISTRY: dict[str, tuple[str, Callable]] = {
     'Volume': ('emd', write_emd),
     'TiltSeries': ('emd', write_emd),
     'Image': ('emd', write_emd),
+    # A label map is an image dataset whose voxels are labels; the
+    # thresholding and segmentation transforms hand their results out
+    # on ports of this type.
+    'LabelMap': ('emd', write_emd),
     'Table': ('csv', write_table_csv),
     'Molecule': ('xyz', write_molecule_xyz),
 }
