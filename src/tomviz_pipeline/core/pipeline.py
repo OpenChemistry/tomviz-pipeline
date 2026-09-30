@@ -8,6 +8,7 @@ Behavior mirrors the C++ Pipeline class in tomviz."""
 
 from __future__ import annotations
 
+import threading
 from typing import Optional
 
 from .events import Signal
@@ -40,6 +41,11 @@ class Pipeline:
         self._next_node_id: int = 1
         self._paused = False
         self._executor = None
+        # The latest execution's future, and whether execute_when_idle()
+        # owes a run after it; both under _idle_lock.
+        self._idle_lock = threading.Lock()
+        self._current_future: Optional[ExecutionFuture] = None
+        self._idle_execute_queued = False
         # When True, a node's set_parameters() triggers execute() —
         # the C++ pipeline's parametersApplied wiring. Off by default:
         # batch/CLI flows configure nodes without side effects.
@@ -404,18 +410,21 @@ class Pipeline:
     def execute_when_idle(self):
         """Run the pipeline once the in-flight execution (if any) ends,
         without canceling it. Used e.g. when adding a sink: upstream
-        results are not invalidated, so don't interrupt them."""
-        if not self.is_executing():
-            self.execute()
-            return
+        results are not invalidated, so don't interrupt them. Calls made
+        during one execution owe a single run after it, as in C++.
 
-        conn = None
-
-        def on_finished(_future):
-            conn.disconnect()
-            self.execute()
-
-        conn = self.execution_finished.connect(on_finished)
+        An execution is over once its future is finished, not once the
+        executor is idle: a threaded executor announces
+        execution_finished before its worker thread exits, and
+        is_executing() stays True in between. Asking the future, under
+        the lock the finish handler reads the request with, leaves no
+        window for a call to wait on a finish already announced."""
+        with self._idle_lock:
+            current = self._current_future
+            if current is not None and not current.is_finished():
+                self._idle_execute_queued = True
+                return
+        self.execute()
 
     def cancel_execution(self):
         if self._executor is not None:
@@ -438,8 +447,23 @@ class Pipeline:
         # Wire the future before submitting: with the blocking
         # DefaultExecutor the run completes inside submit().
         future = ExecutionFuture()
-        future.finished.connect(
-            lambda f: self.execution_finished.emit(f))
+        future.finished.connect(self._on_execution_finished)
+        with self._idle_lock:
+            self._current_future = future
         self.execution_started.emit(future)
         self.executor.submit(plan, future)
         return future
+
+    def _on_execution_finished(self, future: ExecutionFuture):
+        """Announce the end of an execution, then run once more if
+        execute_when_idle() asked while it was in flight. Only the latest
+        execution settles that request: an older one ending (canceled by
+        a newer submit) leaves the pipeline busy."""
+        with self._idle_lock:
+            owed = (self._idle_execute_queued
+                    and future is self._current_future)
+            if owed:
+                self._idle_execute_queued = False
+        self.execution_finished.emit(future)
+        if owed:
+            self.execute()

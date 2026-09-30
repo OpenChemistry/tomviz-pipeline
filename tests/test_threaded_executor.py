@@ -285,3 +285,101 @@ def test_event_queue_marshals_handler_to_main_thread():
     while not idents and time.monotonic() < deadline:
         events.process(block=True, timeout=0.1)
     assert idents == [threading.get_ident()]
+
+
+# ---- execute_when_idle -------------------------------------------------------
+
+
+def _append_double(p, src):
+    """A new, never-run transform on src's output: stale work for a
+    follow-up execution."""
+    extra = _Double()
+    p.add_node(extra)
+    p.create_link(src.output_port('out'), extra.input_port('in'))
+    return extra
+
+
+def _count_finishes(p, count):
+    """An event set once execution_finished has fired `count` times."""
+    finished = []
+    done = threading.Event()
+
+    def on_finished(fut):
+        finished.append(fut)
+        if len(finished) >= count:
+            done.set()
+
+    p.execution_finished.connect(on_finished)
+    return finished, done
+
+
+def test_execute_when_idle_runs_at_once_when_idle():
+    src = _Source(value=2.0)
+    t = _Double()
+    p, executor = _threaded_pipeline(src, t)
+    finished, done = _count_finishes(p, 1)
+
+    p.execute_when_idle()
+    assert done.wait(TIMEOUT)
+    assert finished[0].succeeded() is True
+    assert t.state == NodeState.Current
+
+
+def test_execute_when_idle_waits_for_the_run_in_flight():
+    src = _Source(value=3.0)
+    block = _Blocking()
+    p, executor = _threaded_pipeline(src, block)
+    started = []
+    p.execution_started.connect(started.append)
+    finished, done = _count_finishes(p, 2)
+
+    first = p.execute()
+    assert block.entered.wait(TIMEOUT)
+    extra = _append_double(p, src)
+    # Neither call cancels the run in flight; together they owe a
+    # single run after it (C++ coalesces the same way).
+    p.execute_when_idle()
+    p.execute_when_idle()
+    block.release.set()
+
+    assert done.wait(TIMEOUT)
+    assert first.succeeded() is True
+    assert first.was_canceled() is False
+    assert block.enter_count == 1
+    assert finished[1].succeeded() is True
+    assert extra.state == NodeState.Current
+    assert extra.output_port('out').data().payload == 6.0
+    assert len(started) == 2
+
+
+def test_execute_when_idle_between_finish_and_worker_exit():
+    # The worker announces execution_finished a little before its thread
+    # exits, and is_executing() stays True in between. A call landing
+    # there must still run: hold the worker right after the announcement
+    # to make that window deterministic.
+    src = _Source(value=1.0)
+    t = _Double()
+    p, executor = _threaded_pipeline(src, t)
+    announced = threading.Event()
+    proceed = threading.Event()
+
+    def hold_first_finish(fut):
+        if not announced.is_set():
+            announced.set()
+            proceed.wait(TIMEOUT)
+
+    p.execution_finished.connect(hold_first_finish)
+    finished, done = _count_finishes(p, 2)
+
+    first = p.execute()
+    assert announced.wait(TIMEOUT)
+    assert first.is_finished()
+    assert p.is_executing() is True  # the worker thread is still alive
+    extra = _append_double(p, src)
+    p.execute_when_idle()
+    proceed.set()
+
+    assert done.wait(TIMEOUT)
+    assert finished[1].succeeded() is True
+    assert extra.state == NodeState.Current
+    assert extra.output_port('out').data().payload == 2.0
