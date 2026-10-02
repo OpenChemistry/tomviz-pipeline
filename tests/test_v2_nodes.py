@@ -3,8 +3,8 @@
 # It is released under the 3-Clause BSD License, see "LICENSE".
 ###############################################################################
 """Tests for the schema-v2 Python node runtime — the CLI side of
-``tomviz_pipeline.nodes.transforms.python_transform.PythonTransform``
-and ``tomviz_pipeline.nodes.sources.python_source.PythonSource`` — plus
+``tomviz_pipeline.nodes.transforms.scriptable.ScriptableTransformNode``
+and ``tomviz_pipeline.nodes.sources.scriptable.ScriptableSourceNode`` — plus
 the abstract Dataset helpers (``apply_to_each_scalar_array``,
 ``empty_copy``) used heavily by v2 operator authors.
 
@@ -20,9 +20,9 @@ import pytest
 
 from tomviz_pipeline import PortData, register_builtins
 from tomviz_pipeline.dataset import Dataset, LegacyDataset
-from tomviz_pipeline.nodes.sources.python_source import PythonSource
-from tomviz_pipeline.nodes.transforms.python_transform import (
-    PythonTransform,
+from tomviz_pipeline.nodes.sources.scriptable import ScriptableSourceNode
+from tomviz_pipeline.nodes.transforms.scriptable import (
+    ScriptableTransformNode,
 )
 
 
@@ -144,7 +144,7 @@ def test_empty_copy_preserves_concrete_type():
 
 
 # ============================================================
-# PythonTransform CLI runtime: end-to-end execute
+# ScriptableTransformNode CLI runtime: end-to-end execute
 # ============================================================
 
 
@@ -173,7 +173,7 @@ class MultiplyBy(TransformKernel):
 
 
 def test_python_transform_v2_executes_end_to_end():
-    transform = PythonTransform()
+    transform = ScriptableTransformNode()
     transform.set_json_description(_multiply_v2_description())
     transform.script = _MULTIPLY_V2_SCRIPT
     transform._backend.parameters['factor'] = 3.0
@@ -192,7 +192,7 @@ def test_python_transform_v2_executes_end_to_end():
 def test_python_transform_v2_label_and_ports_from_json():
     """Setting the JSON description should populate the host's label
     and create the input/output ports."""
-    transform = PythonTransform()
+    transform = ScriptableTransformNode()
     transform.set_json_description(_multiply_v2_description())
 
     assert transform.label == 'Multiply By'
@@ -203,7 +203,7 @@ def test_python_transform_v2_label_and_ports_from_json():
 def test_python_transform_v2_none_return_signals_failure():
     """A transform that returns None should produce no outputs — the
     backend collapses non-dict (including None) to an empty result."""
-    transform = PythonTransform()
+    transform = ScriptableTransformNode()
     transform.set_json_description(_multiply_v2_description())
     transform.script = """
 from tomviz_pipeline.kernels import TransformKernel
@@ -222,7 +222,7 @@ class Refuse(TransformKernel):
 def test_python_transform_v2_exception_signals_failure():
     """A transform that raises should be caught and produce no
     outputs (logged at the runtime)."""
-    transform = PythonTransform()
+    transform = ScriptableTransformNode()
     transform.set_json_description(_multiply_v2_description())
     transform.script = """
 from tomviz_pipeline.kernels import TransformKernel
@@ -239,7 +239,7 @@ class Boom(TransformKernel):
 
 
 def test_python_transform_v2_supports_cancel_flag_from_json():
-    transform = PythonTransform()
+    transform = ScriptableTransformNode()
     transform.set_json_description(json.dumps({
         'schemaVersion': 2,
         'name': 'Demo',
@@ -253,7 +253,7 @@ def test_python_transform_v2_supports_cancel_flag_from_json():
 
 
 # ============================================================
-# PythonSource CLI runtime: end-to-end produce
+# ScriptableSourceNode CLI runtime: end-to-end produce
 # ============================================================
 
 
@@ -284,7 +284,7 @@ class ConstantSource(SourceKernel):
 
 
 def test_python_source_v2_executes_end_to_end():
-    source = PythonSource()
+    source = ScriptableSourceNode()
     source.set_json_description(_constant_source_description())
     source.script = _CONSTANT_SOURCE_SCRIPT
     source._backend.parameters['value'] = 7.0
@@ -300,7 +300,7 @@ def test_python_source_v2_executes_end_to_end():
 
 
 def test_python_source_v2_none_return_fails_execute():
-    source = PythonSource()
+    source = ScriptableSourceNode()
     source.set_json_description(_constant_source_description())
     source.script = """
 from tomviz_pipeline.kernels import SourceKernel
@@ -327,7 +327,7 @@ def test_python_transform_v2_persistent_default_from_node_class():
     TransformNode that is the pipeline-wide transform default —
     persistent InMemory unless the application configured otherwise."""
     from tomviz_pipeline import PersistenceMode
-    transform = PythonTransform()
+    transform = ScriptableTransformNode()
     transform.set_json_description(json.dumps({
         'schemaVersion': 2,
         'name': 'Demo',
@@ -340,7 +340,7 @@ def test_python_transform_v2_persistent_default_from_node_class():
 
 
 def test_python_transform_v2_persistent_explicit_false():
-    transform = PythonTransform()
+    transform = ScriptableTransformNode()
     transform.set_json_description(json.dumps({
         'schemaVersion': 2,
         'name': 'Demo',
@@ -352,7 +352,7 @@ def test_python_transform_v2_persistent_explicit_false():
 
 
 def test_python_transform_v2_persistent_explicit_true():
-    transform = PythonTransform()
+    transform = ScriptableTransformNode()
     transform.set_json_description(json.dumps({
         'schemaVersion': 2,
         'name': 'Demo',
@@ -402,7 +402,7 @@ class Watcher(SourceKernel):
 def test_v2_state_persists_across_runs():
     """A fresh user instance runs each execution, so the counter only
     grows if self.state round-trips through the host node."""
-    source = PythonSource()
+    source = ScriptableSourceNode()
     source.set_json_description(_constant_source_description())
     source.script = _COUNTING_SOURCE_SCRIPT
 
@@ -413,7 +413,7 @@ def test_v2_state_persists_across_runs():
 
 
 def test_v2_state_persists_for_class_bound_kernel():
-    from tomviz_pipeline import PythonNode
+    from tomviz_pipeline import ScriptableNode
     from tomviz_pipeline.kernels import SourceKernel
 
     class Counter(SourceKernel):
@@ -425,8 +425,8 @@ def test_v2_state_persists_for_class_bound_kernel():
         def should_auto_execute(self, value=0.0):
             return self.state.get('runs', 0) < 2
 
-    node = PythonNode(json.loads(_constant_source_description()),
-                      kernel=Counter)
+    node = ScriptableNode(json.loads(_constant_source_description()),
+                          kernel=Counter)
     assert node.query_should_auto_execute() is True
     assert node.execute() is True
     assert node.execute() is True
@@ -436,7 +436,7 @@ def test_v2_state_persists_for_class_bound_kernel():
 
 def test_should_auto_execute_default_false():
     """Scripts without the hook fall back to the base class's False."""
-    source = PythonSource()
+    source = ScriptableSourceNode()
     source.set_json_description(_constant_source_description())
     source.script = _CONSTANT_SOURCE_SCRIPT
 
@@ -445,7 +445,7 @@ def test_should_auto_execute_default_false():
 
 
 def test_should_auto_execute_hook_and_state():
-    source = PythonSource()
+    source = ScriptableSourceNode()
     source.set_json_description(_constant_source_description())
     source.script = _WATCHER_SCRIPT
     source._backend.parameters['value'] = 7.5
@@ -460,7 +460,7 @@ def test_should_auto_execute_hook_and_state():
 
 
 def test_should_auto_execute_exception_answers_false():
-    source = PythonSource()
+    source = ScriptableSourceNode()
     source.set_json_description(_constant_source_description())
     source.script = _WATCHER_SCRIPT
     # Default value=0.0 trips the hook's parameter check.
@@ -470,7 +470,7 @@ def test_should_auto_execute_exception_answers_false():
 
 def test_should_auto_execute_rebound_state_is_harvested():
     """Rebinding self.state (rather than mutating it) must land too."""
-    source = PythonSource()
+    source = ScriptableSourceNode()
     source.set_json_description(_constant_source_description())
     source.script = """
 from tomviz_pipeline.kernels import SourceKernel
@@ -490,7 +490,7 @@ class Rebinder(SourceKernel):
 def test_node_executor_default_asks_the_node_in_process():
     from tomviz_pipeline import InternalNodeExecutor, NodeExecutor
 
-    source = PythonSource()
+    source = ScriptableSourceNode()
     source.set_json_description(_constant_source_description())
     source.script = _WATCHER_SCRIPT
     source._backend.parameters['value'] = 7.5
@@ -508,7 +508,7 @@ def test_auto_execute_settings_round_trip():
         DEFAULT_AUTO_EXECUTE_INTERVAL_SECONDS,
     )
 
-    source = PythonSource()
+    source = ScriptableSourceNode()
     source.set_json_description(_constant_source_description())
     source.script = _CONSTANT_SOURCE_SCRIPT
     source.user_state = {'secret': 1}
@@ -520,13 +520,13 @@ def test_auto_execute_settings_round_trip():
     entry = source.serialize()
     assert entry['autoExecute'] == {'enabled': True, 'intervalSeconds': 5}
 
-    restored = PythonSource()
+    restored = ScriptableSourceNode()
     restored.deserialize(entry)
     assert restored.auto_execute_enabled is True
     assert restored.auto_execute_interval_seconds == 5
     assert restored.user_state == {}
 
-    defaults = PythonSource()
+    defaults = ScriptableSourceNode()
     defaults.deserialize({'autoExecute': {}})
     assert defaults.auto_execute_enabled is False
     assert (defaults.auto_execute_interval_seconds
@@ -534,7 +534,7 @@ def test_auto_execute_settings_round_trip():
 
 
 def test_external_only_flag_parsed():
-    source = PythonSource()
+    source = ScriptableSourceNode()
     source.set_json_description(_constant_source_description())
     assert source._backend.external_only is False
 
@@ -649,6 +649,7 @@ def test_run_without_node_state_writes_no_sidecar(tmp_path):
 
 
 _WRITEBACK_DESCRIPTION = json.dumps({
+    'schemaVersion': 2,
     'name': 'WriteBack',
     'outputs': [{'name': 'volume', 'type': 'ImageData'}],
     'parameters': [
@@ -683,7 +684,7 @@ class WriteBack(SourceKernel):
 
 
 def _writeback_source():
-    source = PythonSource()
+    source = ScriptableSourceNode()
     source.set_json_description(_WRITEBACK_DESCRIPTION)
     source.script = _WRITEBACK_SCRIPT
     return source
@@ -791,7 +792,7 @@ def test_set_parameter_in_should_auto_execute():
 
 
 def test_set_parameter_unknown_name_fails_the_run_keeps_earlier_updates():
-    from tomviz_pipeline import PythonNode
+    from tomviz_pipeline import ScriptableNode
     from tomviz_pipeline.kernels import SourceKernel
 
     class Bad(SourceKernel):
@@ -801,7 +802,7 @@ def test_set_parameter_unknown_name_fails_the_run_keeps_earlier_updates():
             return {'volume': Dataset(
                 {'a': np.zeros((2, 2, 2), dtype=np.float32)}, 'a')}
 
-    node = PythonNode(json.loads(_WRITEBACK_DESCRIPTION), kernel=Bad)
+    node = ScriptableNode(json.loads(_WRITEBACK_DESCRIPTION), kernel=Bad)
     assert node.execute() is False
     # Harvested in a finally, like self.state.
     assert node.parameter('frame') == 5
@@ -922,7 +923,7 @@ def test_script_using_legacy_tomviz_nodes_alias_executes():
     running forever: against the _legacy_nodes alias in standalone
     environments, or against a real tomviz install's classes (this env)
     via the dual-package kernel discovery."""
-    transform = PythonTransform()
+    transform = ScriptableTransformNode()
     transform.set_json_description(_multiply_v2_description())
     transform.script = _MULTIPLY_LEGACY_ALIAS_SCRIPT
     transform._backend.parameters['factor'] = 4.0
@@ -966,7 +967,7 @@ def test_python_transform_v2_progress_without_reporter_drives_the_node():
     """A kernel writing self.progress with no executor progress object
     installed (node.progress is None) must not fail; the values land on
     the node's progress API and its signals."""
-    transform = PythonTransform()
+    transform = ScriptableTransformNode()
     transform.set_json_description(_multiply_v2_description())
     transform.script = _PROGRESS_V2_SCRIPT
     assert transform.progress is None
@@ -1004,7 +1005,7 @@ def test_python_transform_v2_exception_fails_the_node_in_a_run():
             self.output_port('volume').set_data(PortData(ds, 'ImageData'))
             return True
 
-    boom = PythonTransform()
+    boom = ScriptableTransformNode()
     boom.set_json_description(_multiply_v2_description())
     boom.script = """
 from tomviz_pipeline.kernels import TransformKernel
@@ -1013,7 +1014,7 @@ class Boom(TransformKernel):
     def transform(self, inputs, factor=1.0):
         raise RuntimeError("intentional")
 """
-    downstream = PythonTransform()
+    downstream = ScriptableTransformNode()
     downstream.set_json_description(_multiply_v2_description())
     downstream.script = _MULTIPLY_V2_SCRIPT
 

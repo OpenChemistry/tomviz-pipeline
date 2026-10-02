@@ -179,6 +179,57 @@ def test_breakpoint_stops_before_node():
     assert tail.run_count == 0
 
 
+def test_breakpoint_stops_only_its_own_branch():
+    src = _Source()
+    bp = _Double()
+    tail = _Double()
+    bp.breakpoint = True
+    p, executor = _threaded_pipeline(src, bp, tail)
+    # A second branch off the source, added after the stopped one so it
+    # comes later in the plan.
+    sibling = _Double()
+    p.add_node(sibling)
+    p.create_link(src.output_port('out'), sibling.input_port('in'))
+
+    hits = []
+    p.breakpoint_reached.connect(lambda node: hits.append(node))
+
+    future = p.execute()
+    assert future.wait(TIMEOUT)
+    assert future.succeeded() is False
+    assert hits == [bp]
+    assert (bp.run_count, tail.run_count) == (0, 0)
+    assert (bp.state, tail.state) == (NodeState.New, NodeState.New)
+    assert sibling.state == NodeState.Current
+    assert sibling.run_count == 1
+
+
+def test_node_with_an_unlinked_input_waits_without_failing():
+    src = _Source()
+    half = _Double()
+    half.add_input('other', 'ImageData')
+    tail = _Double()
+    p, executor = _threaded_pipeline(src, half, tail)
+    sibling = _Double()
+    p.add_node(sibling)
+    p.create_link(src.output_port('out'), sibling.input_port('in'))
+
+    future = p.execute()
+    assert future.wait(TIMEOUT)
+    assert future.succeeded() is True
+    assert (half.run_count, tail.run_count) == (0, 0)
+    assert (half.state, tail.state) == (NodeState.New, NodeState.New)
+    assert sibling.state == NodeState.Current
+
+    # Linked, it runs.
+    p.create_link(src.output_port('out'), half.input_port('other'))
+    future = p.execute()
+    assert future.wait(TIMEOUT)
+    assert future.succeeded() is True
+    assert (half.run_count, tail.run_count) == (1, 1)
+    assert tail.state == NodeState.Current
+
+
 # ---- submit while running ---------------------------------------------------
 
 

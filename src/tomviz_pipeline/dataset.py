@@ -2,8 +2,8 @@
 # This source file is part of the tomviz-pipeline project.
 # It is released under the 3-Clause BSD License, see "LICENSE".
 ###############################################################################
-"""The numpy-backed Dataset passed to operators, plus the LegacyDataset
-upgrade used by v1 (``tomviz.operators``-style) transforms. Merges the
+"""The numpy-backed Dataset passed to kernels, plus the LegacyDataset
+upgrade used by v1 (``tomviz.operators``-style) kernels. Merges the
 old tomviz ``dataset`` ABC and its ``external_dataset`` implementation
 into a single concrete class."""
 
@@ -18,7 +18,7 @@ ARRAY_TYPES = (collections.abc.Sequence, np.ndarray)
 
 
 class Dataset:
-    """The standard object that is passed to operators within tomviz.
+    """The standard object that is passed to kernels within tomviz.
 
     It provides a unified interface for accessing and manipulating tilt
     image stacks and volumetric data, including scalar arrays, spacing
@@ -26,8 +26,8 @@ class Dataset:
     calibration data (dark/white fields).
 
     This object will always be automatically provided as the first
-    argument in the `transform()` function within operators. For
-    example, for the `Rotate` operator:
+    argument in the `transform()` function of a v1 kernel. For
+    example, for the `Rotate` kernel:
 
     .. code-block:: python
 
@@ -303,7 +303,7 @@ class Dataset:
         the new active scalar. If every array is filtered out, the
         result is an empty dataset.
 
-        Useful when an operator's per-array logic should run uniformly
+        Useful when a kernel's per-array logic should run uniformly
         across every scalar array in the dataset — saves writing the
         explicit ``for name in dataset.scalars_names: …`` loop.
 
@@ -341,9 +341,9 @@ class Dataset:
 
 class LegacyDataset(Dataset):
     """Adds the v1 ``create_child_dataset`` API expected by
-    ``tomviz.operators``-derived recon-style operators. The CLI's
-    LegacyPythonTransform upgrades each input to a LegacyDataset
-    before invoking a v1 operator; v2 nodes see the base
+    ``tomviz.operators``-derived recon-style v1 kernels. The legacy
+    kernel backend upgrades each input to a LegacyDataset before
+    invoking a v1 kernel; v2 nodes see the base
     :class:`Dataset` instead, so the legacy affordance never leaks
     into a v2 author's namespace."""
 
@@ -352,8 +352,8 @@ class LegacyDataset(Dataset):
         """Build a LegacyDataset that shares state with @a base.
         Bypasses ``__init__`` and copies the instance dict, which is
         safe here because LegacyDataset adds no new instance state.
-        Used by the CLI's LegacyPythonTransform to upgrade the
-        deep-copied input on its way into a v1 operator."""
+        Used by the legacy kernel backend to upgrade the deep-copied
+        input on its way into a v1 kernel."""
         legacy = cls.__new__(cls)
         legacy.__dict__.update(base.__dict__)
         return legacy

@@ -149,6 +149,7 @@ def test_external_execution_fails_with_empty_env(tmp_path):
 # ---- node state round trip + auto-execute poll -----------------------------
 
 _COUNTING_SOURCE_DESCRIPTION = json.dumps({
+    'schemaVersion': 2,
     'name': 'CountingSource',
     'outputs': [{'name': 'volume', 'type': 'ImageData'}],
     'parameters': [{'name': 'value', 'type': 'double', 'default': 0.0}],
@@ -176,9 +177,9 @@ class CountingSource(SourceKernel):
 
 
 def _counting_node(env_path):
-    from tomviz_pipeline import PythonNode
-    node = PythonNode(_COUNTING_SOURCE_DESCRIPTION,
-                      kernel=_COUNTING_SOURCE_SCRIPT)
+    from tomviz_pipeline import ScriptableNode
+    node = ScriptableNode(_COUNTING_SOURCE_DESCRIPTION,
+                          kernel=_COUNTING_SOURCE_SCRIPT)
     node.set_parameters(value=7.5)
     node.node_executor = ExternalNodeExecutor(env_path=str(env_path))
     return node
@@ -234,6 +235,7 @@ def test_external_should_auto_execute_without_cli_answers_false(tmp_path):
 
 
 _WRITEBACK_DESCRIPTION = json.dumps({
+    'schemaVersion': 2,
     'name': 'WriteBack',
     'outputs': [{'name': 'volume', 'type': 'ImageData'}],
     'parameters': [
@@ -262,8 +264,8 @@ class WriteBack(SourceKernel):
 
 
 def _writeback_node(env_path):
-    from tomviz_pipeline import PythonNode
-    node = PythonNode(_WRITEBACK_DESCRIPTION, kernel=_WRITEBACK_SCRIPT)
+    from tomviz_pipeline import ScriptableNode
+    node = ScriptableNode(_WRITEBACK_DESCRIPTION, kernel=_WRITEBACK_SCRIPT)
     node.node_executor = ExternalNodeExecutor(env_path=str(env_path))
     return node
 

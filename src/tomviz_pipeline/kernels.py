@@ -2,14 +2,14 @@
 # This source file is part of the tomviz-pipeline project.
 # It is released under the 3-Clause BSD License, see "LICENSE".
 ###############################################################################
-"""User-facing base classes for schema-v2 operator scripts.
+"""User-facing base classes for schema-v2 kernel scripts.
 
 A *kernel* is the compute payload hosted inside a graph node: a schema-v2
-operator script defines exactly one subclass of :class:`SourceKernel` or
-:class:`TransformKernel`. The runtime (``PythonSource`` /
-``PythonTransform`` via ``PythonNodeBackend``) instantiates it fresh for
-each execution, injects an ``_operator_wrapper`` for progress / cancel /
-completion plumbing, and calls the user method:
+script defines exactly one subclass of :class:`SourceKernel` or
+:class:`TransformKernel`. The runtime (``ScriptableSourceNode`` /
+``ScriptableTransformNode`` via ``KernelBackend``) instantiates it fresh
+for each execution, injects a ``ExecutionContext`` (``self._execution_context``)
+for progress / cancel / completion plumbing, and calls the user method:
 
   * ``SourceKernel.produce(self, **params) -> dict | None`` — for nodes
     with no inputs that emit output port data (file readers, synthetic
@@ -31,10 +31,9 @@ Molecule ports it's a :class:`tomviz_pipeline.table.Table` /
 :class:`tomviz_pipeline.molecule.Molecule` (built with
 ``tomviz.utils.make_spreadsheet`` / ``make_molecule``).
 
-Progress / cancel / completion follow the existing
-``tomviz_pipeline.operators`` contract —
-:class:`tomviz_pipeline.operators.Progress` is reused under the hood so
-the multi-port routing of ``self.progress.data = X`` Just Works.
+Progress / cancel / completion work as for v1 scripts: both carry a
+:class:`Progress`, so the multi-port routing of
+``self.progress.data = X`` Just Works.
 
 Kernels are deliberately NOT graph nodes: they carry no ports, links, or
 pipeline state (that is :class:`tomviz_pipeline.core.Node` and friends).
@@ -53,7 +52,84 @@ from __future__ import annotations
 
 import math
 
-from tomviz_pipeline.operators import Progress
+from tomviz_pipeline._internal import AttributeAlias
+
+
+class Progress:
+    """
+    Reports a running kernel's progress. Every kernel carries one as
+    ``self.progress``:
+
+    .. code-block:: python
+
+        class MyKernel(TransformKernel):
+            def transform(self, inputs, ...):
+                self.progress.maximum = 100
+
+                for i in range(100):
+                    self.progress.value = i
+                    self.progress.message = f'Running: {i}'
+    """
+
+    def __init__(self, owner):
+        """
+        :meta private:
+        """
+        self._owner = owner
+
+    @property
+    def maximum(self) -> int:
+        """
+        Property defining the maximum progress value
+        """
+        return self._owner._execution_context.progress_maximum
+
+    @maximum.setter
+    def maximum(self, value: int):
+        """Set the maximum progress value"""
+        self._owner._execution_context.progress_maximum = value
+
+    @property
+    def value(self) -> int:
+        """
+        Property defining the current progress value
+        """
+        return self._owner._execution_context.progress_value
+
+    @value.setter
+    def value(self, value: int):
+        """Update the current progress value"""
+        self._owner._execution_context.progress_value = value
+
+    @property
+    def message(self) -> str:
+        """Property defining the current progress message"""
+        return self._owner._execution_context.progress_message
+
+    @message.setter
+    def message(self, msg: str):
+        """Update the progress message"""
+        self._owner._execution_context.progress_message = msg
+
+    def _data(self, value):
+        # Multi-port routing: when the wrapper advertises a primary
+        # port name (the new pipeline does; the legacy app's wrapper
+        # doesn't), translate the bare-value form into the explicit
+        # {port_name: payload} form before forwarding. Kernels that
+        # already pass a dict (multi-port preview) are passed through
+        # untouched.
+        context = self._owner._execution_context
+        primary = getattr(context, 'primary_port', None)
+        if primary and not isinstance(value, dict):
+            value = {primary: value}
+
+        context.progress_data = value
+
+    # Write-only property to update child data
+    data = property(fset=_data,
+                    doc="""
+                    :meta private:
+                    """)
 
 
 class Kernel:
@@ -82,6 +158,10 @@ class Kernel:
     installed on the node; see the method for the exact semantics.
     """
 
+    # Former name of the runtime's ``_execution_context``, which the tomviz
+    # desktop application still sets.
+    _operator_wrapper = AttributeAlias('_execution_context')
+
     def __new__(cls, *args, **kwargs):
         """:meta private:"""
         obj = super().__new__(cls)
@@ -106,7 +186,7 @@ class Kernel:
         """True when the user has requested cancellation. Long-running
         ``produce`` / ``transform`` implementations should poll this and
         bail out when set."""
-        return self._operator_wrapper.canceled
+        return self._execution_context.canceled
 
     @property
     def completed(self) -> bool:
@@ -114,7 +194,7 @@ class Kernel:
         iterative algorithm should stop with its current best result).
         Iterative ``produce`` / ``transform`` implementations should
         poll this and return what they have."""
-        return self._operator_wrapper.completed
+        return self._execution_context.completed
 
     def should_auto_execute(self, **parameters) -> bool:
         """Decide whether a periodic execution should happen now.
@@ -144,8 +224,8 @@ class Kernel:
     def set_parameter(self, name: str, value):
         """Change the value of one of the node's parameters.
 
-        ``name`` must be a parameter declared in the operator JSON
-        description; anything else raises ``ValueError``. ``value`` is
+        ``name`` must be a parameter declared in the node's JSON
+        definition; anything else raises ``ValueError``. ``value`` is
         coerced to the declared type (``double`` → float, ``int`` →
         int, ``bool`` → bool, string-like types → str, ``enumeration``
         → one of the declared option values) and rejected with
@@ -250,8 +330,8 @@ class SourceKernel(Kernel):
     def produce(self, **params) -> dict | None:
         """Compute and return this source's outputs.
 
-        :param params: parameter values, named per the operator JSON
-            description's ``parameters`` array.
+        :param params: parameter values, named per the JSON
+            definition's ``parameters`` array.
         :returns: dict mapping output port names (declared in the JSON
             ``outputs`` array) to payload objects. Return ``None``
             (or simply ``return`` with no value) to signal cancellation
@@ -284,8 +364,8 @@ class TransformKernel(Kernel):
 
         :param inputs: dict mapping input port names (declared in the
             JSON ``inputs`` array) to payload objects.
-        :param params: parameter values, named per the operator JSON
-            description's ``parameters`` array.
+        :param params: parameter values, named per the JSON
+            definition's ``parameters`` array.
         :returns: dict mapping output port names (declared in the JSON
             ``outputs`` array) to payload objects. Return ``None``
             (or simply ``return`` with no value) to signal cancellation

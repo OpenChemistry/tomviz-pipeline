@@ -23,26 +23,26 @@ from tqdm import tqdm
 
 
 class ProgressBase(object):
-    def started(self, op=None):
-        self._operator_index = op
+    def started(self, node_id=None):
+        self._node_id = node_id
 
-    def finished(self, op=None):
+    def finished(self, node_id=None):
         pass
 
     def control_channel(self):
         """Return a ControlChannel for the parent → child direction,
         or None if this progress mode has no return path (e.g. tqdm).
-        OperatorWrapper polls the channel lazily to detect cancel /
+        ExecutionContext polls the channel lazily to detect cancel /
         complete requests."""
         return None
 
 
 class ControlChannel(object):
     """Subprocess-side reader for control messages from the parent.
-    Poll() is called from OperatorWrapper getters; implementations
+    Poll() is called from ExecutionContext getters; implementations
     update wrapper._canceled / wrapper._completed in place based on
     whatever signals are pending in their transport. Cheap enough to
-    invoke per-getter — operators check these flags inside loops."""
+    invoke per-getter — kernels check these flags inside loops."""
 
     def poll(self, wrapper):
         raise NotImplementedError
@@ -107,7 +107,7 @@ class SocketControlChannel(ControlChannel):
 class TqdmProgress(ProgressBase):
     def __init__(self):
         # Initialize maximum/value to 0 (matching the in-app
-        # _operator_wrapper defaults) so operators can safely use
+        # ExecutionContext defaults) so kernels can safely use
         # ``self.progress.value += 1`` before any explicit assignment.
         self._maximum = 0
         self._value = 0
@@ -151,7 +151,7 @@ class TqdmProgress(ProgressBase):
             self._progress_bar.close()
         return False
 
-    def finished(self, op=None):
+    def finished(self, node_id=None):
         if self._progress_bar is not None:
             self._progress_bar.close()
             self._progress_bar = None
@@ -161,7 +161,7 @@ class JsonProgress(ProgressBase, metaclass=abc.ABCMeta):
     """Base class for the socket and files progress modes. Subclasses
     implement write() (emit one JSON message)."""
 
-    # Set by the transform wrapper before the operator runs so a bare
+    # Set by the transform wrapper before the kernel runs so a bare
     # `self.progress.data = X` knows which output port to populate.
     _primary_port = None
     # Path of the most recent intermediate-update tvh5 file. Held so we
@@ -174,13 +174,16 @@ class JsonProgress(ProgressBase, metaclass=abc.ABCMeta):
     def write(self, data):
         ...
 
-    def set_operator_index(self, index):
-        self._operator_index = index
+    def set_node_id(self, node_id):
+        self._node_id = node_id
+
+    # Former name.
+    set_operator_index = set_node_id
 
     def set_primary_port(self, name):
         """Configure the port name a bare-value `progress.data = X`
         update routes to. Per-node — call before invoking the
-        operator."""
+        kernel."""
         self._primary_port = name
 
     @property
@@ -191,7 +194,7 @@ class JsonProgress(ProgressBase, metaclass=abc.ABCMeta):
     def maximum(self, value):
         self.write({
             'type': 'progress.maximum',
-            'operator': self._operator_index,
+            'operator': self._node_id,
             'value': value,
         })
         self._maximum = value
@@ -204,7 +207,7 @@ class JsonProgress(ProgressBase, metaclass=abc.ABCMeta):
     def value(self, value):
         self.write({
             'type': 'progress.step',
-            'operator': self._operator_index,
+            'operator': self._node_id,
             'value': value,
         })
         self._value = value
@@ -217,7 +220,7 @@ class JsonProgress(ProgressBase, metaclass=abc.ABCMeta):
     def message(self, msg):
         self.write({
             'type': 'progress.message',
-            'operator': self._operator_index,
+            'operator': self._node_id,
             'value': msg,
         })
         self._message = msg
@@ -238,7 +241,7 @@ class JsonProgress(ProgressBase, metaclass=abc.ABCMeta):
         else:
             if self._primary_port is None:
                 # No port to route to — drop silently rather than raise
-                # (operators shouldn't crash if previews aren't wired).
+                # (kernels shouldn't crash if previews aren't wired).
                 return
             port_data = {self._primary_port: value}
         self.write_intermediate(port_data)
@@ -259,7 +262,7 @@ class JsonProgress(ProgressBase, metaclass=abc.ABCMeta):
         self._last_intermediate_path = path
         self.write({
             'type': 'progress.data',
-            'operator': self._operator_index,
+            'operator': self._node_id,
             'value': os.path.basename(path),
         })
 
@@ -276,7 +279,7 @@ class JsonProgress(ProgressBase, metaclass=abc.ABCMeta):
         pipeline = Pipeline()
         src = SourceNode()
         pipeline.add_node(src)
-        node_id = self._operator_index if self._operator_index is not None \
+        node_id = self._node_id if self._node_id is not None \
             else 1
         pipeline.set_node_id(src, node_id)
 
@@ -316,18 +319,18 @@ class JsonProgress(ProgressBase, metaclass=abc.ABCMeta):
     def __exit__(self, *exc):
         return False
 
-    def started(self, op=None):
-        super().started(op)
+    def started(self, node_id=None):
+        super().started(node_id)
         msg = {'type': 'started'}
-        if op is not None:
-            msg['operator'] = op
+        if node_id is not None:
+            msg['operator'] = node_id
         self.write(msg)
 
-    def finished(self, op=None):
-        super().started(op)
+    def finished(self, node_id=None):
+        super().finished(node_id)
         msg = {'type': 'finished'}
-        if op is not None:
-            msg['operator'] = op
+        if node_id is not None:
+            msg['operator'] = node_id
         self.write(msg)
 
 

@@ -3,7 +3,7 @@
 # It is released under the 3-Clause BSD License, see "LICENSE".
 ###############################################################################
 """EMD and Data Exchange HDF5 readers/writers used by the pipeline CLI
-and operator helpers."""
+and kernel helpers."""
 
 import collections
 import copy

@@ -5,7 +5,7 @@
 """Per-transform parity tests for the built-in transforms. Each test
 exercises the Python implementation against the documented semantics of
 the C++ transforms they mirror (tomviz repo, tomviz/pipeline/
-transforms/*.cxx), plus LegacyPythonTransform running real operator
+transforms/*.cxx), plus LegacyScriptableTransformNode running real operator
 scripts (inlined below so the suite is self-contained)."""
 
 import json
@@ -22,8 +22,8 @@ from tomviz_pipeline.nodes.transforms.convert_to_volume import (
     ConvertToVolumeTransform,
 )
 from tomviz_pipeline.nodes.transforms.crop import CropTransform
-from tomviz_pipeline.nodes.transforms.legacy_python import (
-    LegacyPythonTransform,
+from tomviz_pipeline.nodes.transforms.legacy_scriptable import (
+    LegacyScriptableTransformNode,
 )
 from tomviz_pipeline.nodes.transforms.set_tilt_angles import (
     SetTiltAnglesTransform,
@@ -146,10 +146,10 @@ def test_threshold_produces_binary_mask():
     assert mask.dtype == np.uint8
 
 
-# ---- LegacyPythonTransform ----------------------------------------------
+# ---- LegacyScriptableTransformNode ---------------------------------------
 # Real operator scripts, inlined verbatim from the tomviz repo
 # (tomviz/python/AddConstant.{py,json} and CylindricalCrop.{py,json}) so
-# LegacyPythonTransform is exercised against genuine operator code.
+# LegacyScriptableTransformNode is exercised against genuine operator code.
 
 ADD_CONSTANT_DESCRIPTION = json.dumps({
     'name': 'AddConstant',
@@ -205,10 +205,10 @@ def transform(dataset, constant=0.0):
 
 
 def test_legacy_python_transform_runs_real_operator():
-    """LegacyPythonTransform must be able to load a JSON-described
+    """LegacyScriptableTransformNode must be able to load a JSON-described
     Python operator, execute its `transform()`, and return the mutated
     dataset on its primary output port."""
-    t = LegacyPythonTransform()
+    t = LegacyScriptableTransformNode()
     t.deserialize({'description': ADD_CONSTANT_DESCRIPTION,
                    'script': ADD_CONSTANT_SCRIPT,
                    'arguments': {'constant': 7.0}})
@@ -217,7 +217,7 @@ def test_legacy_python_transform_runs_real_operator():
     ds = Dataset({'ImageScalars': arr}, 'ImageScalars')
     ds.spacing = (1.0, 1.0, 1.0)
     result = t.transform({'volume': PortData(ds, 'ImageData')})
-    out_arr = result[t._primary_output_name].payload.active_scalars
+    out_arr = result[t.output_ports()[0].name].payload.active_scalars
     np.testing.assert_array_equal(out_arr, np.full_like(arr, 7.0))
 
 
@@ -299,7 +299,7 @@ def transform(dataset, center_x=-1.0, center_y=-1.0, center_z=-1.0,
 
 
 def _run_cylindrical_crop(arr, **kwargs):
-    t = LegacyPythonTransform()
+    t = LegacyScriptableTransformNode()
     t.deserialize({'description': CYLINDRICAL_CROP_DESCRIPTION,
                    'script': CYLINDRICAL_CROP_SCRIPT,
                    'arguments': kwargs})
@@ -307,7 +307,7 @@ def _run_cylindrical_crop(arr, **kwargs):
     ds = Dataset({'ImageScalars': arr.copy()}, 'ImageScalars')
     ds.spacing = (1.0, 1.0, 1.0)
     result = t.transform({'volume': PortData(ds, 'ImageData')})
-    return result[t._primary_output_name].payload.active_scalars
+    return result[t.output_ports()[0].name].payload.active_scalars
 
 
 def test_cylindrical_crop_defaults_preserve_center():
@@ -389,7 +389,7 @@ def test_legacy_operator_progress_without_reporter_drives_the_node():
     """An Operator subclass writing self.progress runs without an
     executor progress object (the node keeps the operator's own
     Progress) and the values reach the node's progress API."""
-    t = LegacyPythonTransform()
+    t = LegacyScriptableTransformNode()
     t.deserialize({'description': PROGRESS_OPERATOR_DESCRIPTION,
                    'script': PROGRESS_OPERATOR_SCRIPT})
     assert t.progress is None
@@ -398,7 +398,7 @@ def test_legacy_operator_progress_without_reporter_drives_the_node():
                  'ImageScalars')
     result = t.transform({'volume': PortData(ds, 'ImageData')})
 
-    out = result[t._primary_output_name].payload.active_scalars
+    out = result[t.output_ports()[0].name].payload.active_scalars
     np.testing.assert_array_equal(out, np.ones((2, 2, 2), dtype=np.float32))
     assert t.total_progress_steps() == 2
     assert t.progress_step() == 2

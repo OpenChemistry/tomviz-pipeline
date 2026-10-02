@@ -830,7 +830,7 @@ def test_run_output_format_state_round_trip(tmp_path):
 
 
 def test_run_output_format_state_persists_table_payloads(tmp_path):
-    """A LegacyPythonTransform that returns a vtkTable result is
+    """A LegacyScriptableTransformNode that returns a vtkTable result is
     persisted column-by-column under /data/<id>/<port>/c<i>, mirroring
     C++ Tvh5Format::writeTablePayload. The dataRef on the port entry
     must point at the group, and on reload (via load_state) the port
@@ -926,7 +926,7 @@ def transform(dataset):
 
 
 def test_run_output_format_state_persists_molecule_payloads(tmp_path):
-    """A LegacyPythonTransform that returns a vtkMolecule result is
+    """A LegacyScriptableTransformNode that returns a vtkMolecule result is
     persisted as atomic-numbers / positions / bond datasets under
     /data/<id>/<port>/. On reload (via load_state) the port carries an
     equivalent vtkMolecule. Mirrors the table case below."""
