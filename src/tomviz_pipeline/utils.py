@@ -2,7 +2,7 @@
 # This source file is part of the tomviz-pipeline project.
 # It is released under the 3-Clause BSD License, see "LICENSE".
 ###############################################################################
-"""Helpers used by operator scripts (reachable as ``tomviz.utils`` via
+"""Helpers used by kernel scripts (reachable as ``tomviz.utils`` via
 tomviz_pipeline._compat) and by the automatic ``apply_to_each_array``
 transform decoration. Pure numpy — ``make_spreadsheet`` and
 ``make_molecule`` build the library's own :class:`~tomviz_pipeline.
@@ -103,10 +103,10 @@ def rotate_shape(input: np.ndarray, angle: float,
 
 def apply_to_each_array(func):
     """
-    This decorator causes an operator `transform()` function to
+    This decorator causes a v1 kernel `transform()` function to
     automatically run one time for every array.
 
-    For example, for the rotation operator:
+    For example, for the rotation kernel:
 
     .. code-block:: python
 
@@ -119,7 +119,7 @@ def apply_to_each_array(func):
     object will only contain a single array on `dataset.active_scalars`
     each time.
 
-    This allows an operator `transform()` function to be written in
+    This allows a v1 kernel `transform()` function to be written in
     a way that appears to only operate on one array, but then automatically
     be ran multiple times to apply to each array.
 
@@ -244,7 +244,7 @@ def make_spreadsheet(column_names: list[str], table: np.ndarray,
                      ) -> 'Table':  # noqa: F821
     """Make a spreadsheet object to use within Tomviz
 
-    If returned from an operator, this will ultimately appear within the
+    If returned from a kernel, this will ultimately appear within the
     pipeline, and will be save-able to a JSON file.
 
     The output of this function ought to be included in the returned
@@ -298,7 +298,7 @@ def make_molecule(atomic_numbers, positions, bonds=None,
     :param bond_orders: optional per-bond order; defaults to 1.
 
     Like :func:`make_spreadsheet`, the returned object ought to be
-    included in the dictionary returned by an operator, under the key
+    included in the dictionary returned by a kernel, under the key
     of a ``Molecule`` output port.
     """
     from tomviz_pipeline.molecule import Molecule

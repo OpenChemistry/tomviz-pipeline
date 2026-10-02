@@ -25,7 +25,7 @@ The package is layered:
   the corresponding port types), EMD/HDF5 I/O, schema-v2 state files
   (`.tvsm` JSON and `.tvh5` HDF5 containers), the built-in
   source/transform/sink nodes,
-  Python operator authoring APIs, progress reporting channels, the
+  kernel authoring APIs, progress reporting channels, the
   `ExternalNodeExecutor` (run a node under a different Python
   environment), the batch runner, and the `tomviz-pipeline` CLI.
 
@@ -40,21 +40,21 @@ pip install tomviz-pipeline
 
 Requires Python 3.9+. The runtime dependencies are numpy, h5py, click
 and tqdm. The optional `tomviz-pipeline[vtk]` extra lets state files
-carry tables built directly with VTK by operator scripts; operator
-scripts bring their own scientific dependencies (scipy, tomopy, ...).
+carry tables built directly with VTK by kernel scripts; kernel scripts
+bring their own scientific dependencies (scipy, tomopy, ...).
 
 ## Quick start
 
-A python node is built from exactly two artifacts: a **definition**
-(the interface — ports, parameters, label; the same JSON vocabulary as
-tomviz's operator `.json` sidecar files) and a **kernel** (the compute —
-the same class a tomviz operator script contains, so anyone who has
-written a tomviz Python operator already knows how):
+A scriptable node is built from exactly two artifacts: a
+**definition** (the interface — ports, parameters, label; the same JSON
+vocabulary as tomviz's `.json` sidecar files) and a **kernel** (the
+compute — the same class a tomviz kernel script contains, so anyone who
+has written one already knows how):
 
 ```python
 import numpy as np
 
-from tomviz_pipeline import Pipeline, PythonNode
+from tomviz_pipeline import Pipeline, ScriptableNode
 from tomviz_pipeline.dataset import Dataset
 from tomviz_pipeline.kernels import SourceKernel, TransformKernel
 
@@ -70,6 +70,7 @@ class Multiply(TransformKernel):
             lambda a: a * factor)}
 
 CONSTANT_VOLUME = {
+    'schemaVersion': 2,
     'name': 'ConstantVolume',
     'outputs': [{'name': 'volume', 'type': 'ImageData'}],
     'parameters': [{'name': 'value', 'type': 'double', 'default': 1.0},
@@ -77,6 +78,7 @@ CONSTANT_VOLUME = {
 }
 
 MULTIPLY = {
+    'schemaVersion': 2,
     'name': 'Multiply',
     'inputs':  [{'name': 'volume', 'type': 'ImageData'}],
     'outputs': [{'name': 'volume', 'type': 'ImageData'}],
@@ -84,9 +86,9 @@ MULTIPLY = {
 }
 
 pipeline = Pipeline()
-source = pipeline.add_node(PythonNode(CONSTANT_VOLUME,
-                                      kernel=ConstantVolume))
-scale = pipeline.add_node(PythonNode(MULTIPLY, kernel=Multiply))
+source = pipeline.add_node(ScriptableNode(CONSTANT_VOLUME,
+                                          kernel=ConstantVolume))
+scale = pipeline.add_node(ScriptableNode(MULTIPLY, kernel=Multiply))
 pipeline.create_link(source.output_port('volume'),
                      scale.input_port('volume'))
 source.set_parameters(value=21.0)
@@ -100,10 +102,25 @@ Both constructor arguments are polymorphic, with one rule: **strings
 are content, paths are files.**
 
 - `definition`: a dict, a JSON string, or a `pathlib.Path` to a
-  `.json` file. The definition decides the node shape — no `inputs`
-  means a `source.python` node, otherwise `transform.python`.
-- `kernel`: a kernel class you hold, the source text of an operator
-  script, or a `pathlib.Path` to a `.py` file.
+  `.json` file. The definition decides the node class: with
+  `"schemaVersion": 2`, no `inputs` means a `ScriptableSourceNode`
+  (`source.python`), otherwise a `ScriptableTransformNode`
+  (`transform.python`). A definition without `schemaVersion` is a v1
+  definition, run by a `LegacyScriptableTransformNode`
+  (`transform.legacyPython`): the `transform(dataset, **params)`
+  scripts of the tomviz kernel catalog. Until 4.0, one that declares
+  `inputs` or `outputs` without `schemaVersion` is still read as schema
+  2, with a `DeprecationWarning`.
+- `kernel`: a kernel class you hold (schema 2 only), the source text of
+  a script, or a `pathlib.Path` to a `.py` file.
+- `parameters` (optional): initial values in place of the definition's
+  defaults, e.g. `parameters={'factor': 3.0}`. Only parameters the
+  definition declares are accepted. Unlike `set_parameters()` later on,
+  this marks nothing stale: the node is not in a graph yet.
+
+`ScriptableNode(...)` returns the right class, and
+`isinstance(node, ScriptableNode)` holds for all three. `PythonNode` is
+the former name of `ScriptableNode` and still works.
 
 That makes the classic sidecar pair — and kernels whose imports only
 resolve in *another* Python environment — work without ever importing
@@ -113,8 +130,8 @@ the kernel here:
 from pathlib import Path
 from tomviz_pipeline import ExternalNodeExecutor
 
-recon = pipeline.add_node(PythonNode(Path('operators/Reconstruct.json'),
-                                     kernel=Path('operators/Reconstruct.py')))
+recon = pipeline.add_node(ScriptableNode(Path('kernels/Reconstruct.json'),
+                                         kernel=Path('kernels/Reconstruct.py')))
 recon.set_parameters(iterations=100)
 recon.node_executor = ExternalNodeExecutor('/envs/tomopy')
 ```
@@ -154,9 +171,18 @@ Notes on the kernel side:
   inside `should_auto_execute`, return `True` to run with them right
   away. Updates round-trip through external execution like
   `self.state` does.
-- Older operator scripts that import `tomviz.nodes` (the historical
-  spelling, `tomviz.nodes.TransformNode`) keep working: those names
-  resolve to the kernel classes through a compatibility alias.
+- Older scripts that import `tomviz.nodes` (the historical spelling,
+  `tomviz.nodes.TransformNode`) keep working: those names resolve to
+  the kernel classes through a compatibility alias.
+
+Every scriptable node exposes its definition and script:
+`node.json_description` and `node.script` read them. To edit a node in
+use, set `node.script` and call
+`node.reconfigure_description(json_text)`. Both mark the node stale. A
+new definition keeps the parameter values it still declares with the
+same type and returns the names it reset to their defaults; one that
+would change the node's schema or ports raises `ValueError`, since
+ports are fixed once a node exists.
 
 ## Parameters
 
@@ -199,9 +225,9 @@ from tomviz_pipeline import EventQueue, ThreadedExecutor
 # Fresh pipeline with the ConstantVolume / Multiply kernels from the
 # quick start.
 pipeline = Pipeline()
-source = pipeline.add_node(PythonNode(CONSTANT_VOLUME,
-                                      kernel=ConstantVolume))
-scale = pipeline.add_node(PythonNode(MULTIPLY, kernel=Multiply))
+source = pipeline.add_node(ScriptableNode(CONSTANT_VOLUME,
+                                          kernel=ConstantVolume))
+scale = pipeline.add_node(ScriptableNode(MULTIPLY, kernel=Multiply))
 pipeline.create_link(source.output_port('volume'),
                      scale.input_port('volume'))
 
@@ -393,8 +419,8 @@ This is the layer the built-in tomviz node types (readers, crops,
 reconstructions, ...) are made of. Note the trade-off versus kernels:
 graph nodes speak `PortData` and manage their own ports, but only
 deserialize in processes where the application's classes are importable
-— a kernel-hosted node round-trips anywhere because it travels with its
-source.
+— a scriptable node round-trips anywhere because it travels with its
+script.
 
 ## Running a state file
 

@@ -2,10 +2,10 @@
 # This source file is part of the tomviz-pipeline project.
 # It is released under the 3-Clause BSD License, see "LICENSE".
 ###############################################################################
-"""Internal helpers for the operator runtimes: locate the transform
-function / operator class inside a loaded operator module, apply the
+"""Internal helpers for the kernel runtimes: locate the transform
+function / Operator class inside a loaded v1 kernel module, apply the
 automatic transform decorators, and back cancel / complete polling via
-OperatorWrapper."""
+ExecutionContext."""
 
 from __future__ import annotations
 
@@ -15,8 +15,11 @@ import inspect
 import json
 
 
-class OperatorWrapper(object):
-    """Backs `self.canceled` / `self.completed` on operators running
+class ExecutionContext(object):
+    """One execution of a kernel, as the kernel sees it: created by the
+    runtime right before the kernel runs, and only used from inside it.
+
+    Backs `self.canceled` / `self.completed` on kernels running
     under the pure-Python pipeline runtime. The flags can be flipped
     out-of-band by the parent process via a transport-specific
     ControlChannel, which is polled lazily on every getter access —
@@ -24,11 +27,11 @@ class OperatorWrapper(object):
 
     When a graph `node` is supplied, the getters also reflect its
     in-process cancel / complete events, so ThreadedExecutor.cancel()
-    reaches operators that poll these flags even when no parent-process
+    reaches kernels that poll these flags even when no parent-process
     control channel exists.
 
-    It also backs the `Progress` object every operator and kernel
-    carries (`tomviz_pipeline.operators.Progress` reads and writes the
+    It also backs the `Progress` object every v1 and v2 kernel
+    carries (`tomviz_pipeline.kernels.Progress` reads and writes the
     `progress_*` attributes) when the executor installed no progress
     reporter of its own. With a `node` attached the values drive the
     node's progress API, so in-process observers see them through the
@@ -99,9 +102,39 @@ class OperatorWrapper(object):
                 and self._node.is_complete_requested())
 
 
+# Former name.
+OperatorWrapper = ExecutionContext
+
+
+class AttributeAlias:
+    """A class attribute forwarding reads and writes to another instance
+    attribute: keeps a renamed attribute reachable under its former
+    name."""
+
+    def __init__(self, name: str):
+        self._name = name
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        return getattr(obj, self._name)
+
+    def __set__(self, obj, value):
+        setattr(obj, self._name, value)
+
+
+def attach_execution_context(instance, context: ExecutionContext):
+    """Give a running kernel (a v2 kernel or a v1 Operator) its execution
+    context. Also under the former name ``_operator_wrapper``: our base
+    classes alias it, and a class from an older tomviz install reads
+    it."""
+    instance._execution_context = context
+    instance._operator_wrapper = context
+
+
 def find_operator_class(transform_module):
-    from tomviz_pipeline._compat import operator_base_classes
-    base_classes = operator_base_classes()
+    from tomviz_pipeline._compat import legacy_kernel_base_classes
+    base_classes = legacy_kernel_base_classes()
     operator_class = None
     classes = inspect.getmembers(transform_module, inspect.isclass)
     for (name, cls) in classes:
@@ -144,9 +177,9 @@ def find_transform_function(transform_module, op=None):
             raise Exception('Unable to locate transform function.')
 
         o = cls.__new__(cls)
-        # _operator_wrapper is read by CompletableOperator/CancelableOperator
+        # The context is read by CompletableOperator / CancelableOperator
         # __init__ and during transform(); install the pure-Python fallback.
-        o._operator_wrapper = OperatorWrapper(None)
+        attach_execution_context(o, ExecutionContext(None))
         cls.__init__(o)
 
         transform_function = None

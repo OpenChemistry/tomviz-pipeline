@@ -194,10 +194,10 @@ def test_threshold_parameters_drive_transform():
 
 
 def test_v2_python_host_routes_parameters_to_backend():
-    from tomviz_pipeline.nodes.transforms.python_transform import (
-        PythonTransform,
+    from tomviz_pipeline.nodes.transforms.scriptable import (
+        ScriptableTransformNode,
     )
-    transform = PythonTransform()
+    transform = ScriptableTransformNode()
     transform.set_parameters(factor=3.0)
     assert transform._backend.parameters['factor'] == 3.0
     assert transform.parameters['factor'] == 3.0
@@ -205,9 +205,9 @@ def test_v2_python_host_routes_parameters_to_backend():
 
 
 def test_legacy_host_parameters_serialize_as_arguments():
-    from tomviz_pipeline.nodes.transforms.legacy_python import (
-        LegacyPythonTransform,
+    from tomviz_pipeline.nodes.transforms.legacy_scriptable import (
+        LegacyScriptableTransformNode,
     )
-    node = LegacyPythonTransform()
+    node = LegacyScriptableTransformNode()
     node.set_parameters(alpha=1.5)
     assert node.serialize().get('arguments') == {'alpha': 1.5}

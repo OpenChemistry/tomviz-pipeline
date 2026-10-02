@@ -538,8 +538,8 @@ class Node:
         self._input_ports: list[InputPort] = []
         self._output_ports: list[OutputPort] = []
         # Progress hooks. The pipeline executor sets `progress` before
-        # execute() is called; nodes (e.g. LegacyPythonTransform) forward
-        # operator progress updates through it.
+        # execute() is called; scriptable nodes forward their kernel's
+        # progress updates through it.
         self.progress = None
         # Where this node runs: None means in-process (the executor falls
         # back to InternalNodeExecutor). An ExternalNodeExecutor instance
@@ -761,8 +761,8 @@ class Node:
     def cancel_execution(self):
         """Request cooperative cancellation of a running execution. The
         request is observed by code that polls is_cancel_requested()
-        (operator wrappers do) and is forwarded to the node's executor so
-        an external subprocess can be signaled too."""
+        (a kernel's ExecutionContext does) and is forwarded to the node's
+        executor so an external subprocess can be signaled too."""
         self._cancel_event.set()
         if self.node_executor is not None:
             self.node_executor.cancel(self)
@@ -786,7 +786,7 @@ class Node:
 
     # ---- progress --------------------------------------------------------
     # Mirrors the C++ Node progress API. Set by whatever runs the node —
-    # an in-process operator wrapper or the ExternalNodeExecutor
+    # a kernel's in-process ExecutionContext or the ExternalNodeExecutor
     # forwarding subprocess messages; observed via the signals.
 
     def set_total_progress_steps(self, value: int):

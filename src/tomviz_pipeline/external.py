@@ -406,12 +406,13 @@ class ExternalNodeExecutor(NodeExecutor):
                 node.type_name)
             return None
         clone_entry = node.serialize()
-        # A python-hosted kernel crosses the process boundary only as a
-        # script (serialize() re-expresses a bound class via source
+        # A scriptable node's kernel crosses the process boundary only as
+        # a script (serialize() re-expresses a bound class via source
         # capture). If that failed, stop here — before spawning —
         # instead of letting the child die with a confusing error.
-        from tomviz_pipeline.nodes.python_node import PythonNode
-        if isinstance(node, PythonNode) and not clone_entry.get('script'):
+        from tomviz_pipeline.nodes.scriptable import ScriptableNode
+        if (isinstance(node, ScriptableNode)
+                and not clone_entry.get('script')):
             logger.warning(
                 "ExternalNodeExecutor: node '%s' has no script and its "
                 'kernel class (if any) has no retrievable source; '
@@ -768,7 +769,7 @@ class ExternalNodeExecutor(NodeExecutor):
         self._send_control_signal('complete')
 
     def _send_control_signal(self, signal_name: str):
-        # Soft signal — the child's operator polls and observes it at its
+        # Soft signal — the child's kernel polls and observes it at its
         # next checkpoint; the subprocess is never killed (matches the
         # in-process cooperative-cancel semantics).
         reader = self._reader
@@ -785,7 +786,7 @@ def register_external_executor():
 
 def promote_description_env_path(node, entry: dict, env_path: str):
     """Compatibility shim for the pre-extraction `tomviz_pipeline_env`
-    key: old operator JSON descriptions could request execution in a
+    key: older JSON definitions could request execution in a
     specific Python environment. Promote it to an ExternalNodeExecutor
     at deserialize time — unless the node entry carries an explicit
     `executor` block, which is the modern mechanism and always wins."""

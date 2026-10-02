@@ -2,95 +2,16 @@
 # This source file is part of the tomviz-pipeline project.
 # It is released under the 3-Clause BSD License, see "LICENSE".
 ###############################################################################
-"""v1 operator authoring API: Progress, Operator, CancelableOperator,
-CompletableOperator. Operator scripts embedded in state files subclass
-these (via the `tomviz.operators` alias installed by
-tomviz_pipeline._compat)."""
+"""The v1 (legacy) kernel authoring API: Operator, CancelableOperator,
+CompletableOperator. v1 scripts embedded in state files subclass these
+(via the `tomviz.operators` alias installed by tomviz_pipeline._compat).
+Progress lives in tomviz_pipeline.kernels and is re-exported here."""
 
 from __future__ import annotations
 
+from ._internal import AttributeAlias
 from .dataset import Dataset
-
-
-class Progress:
-    """
-    Class used to update operator progress.
-
-    This often exists as `self.progress` on an `Operator` class.
-
-    An example of how it can be utilized within a `transform()` function
-    is provided below:
-
-    .. code-block:: python
-
-        class MyOperator(Operator):
-            def transform(self, dataset, ...):
-                self.progress.maximum = 100
-
-                for i in range(100):
-                    self.progress.value = i
-                    self.progress.message = f'Running: {i}'
-    """
-
-    def __init__(self, operator):
-        """
-        :meta private:
-        """
-        self._operator = operator
-
-    @property
-    def maximum(self) -> int:
-        """
-        Property defining the maximum progress value
-        """
-        return self._operator._operator_wrapper.progress_maximum
-
-    @maximum.setter
-    def maximum(self, value: int):
-        """Set the maximum progress value"""
-        self._operator._operator_wrapper.progress_maximum = value
-
-    @property
-    def value(self) -> int:
-        """
-        Property defining the current progress value
-        """
-        return self._operator._operator_wrapper.progress_value
-
-    @value.setter
-    def value(self, value: int):
-        """Updates the progress of the the operator"""
-        self._operator._operator_wrapper.progress_value = value
-
-    @property
-    def message(self) -> str:
-        """Property defining the current progress message"""
-        return self._operator._operator_wrapper.progress_message
-
-    @message.setter
-    def message(self, msg: str):
-        """Update the progress message of the the operator"""
-        self._operator._operator_wrapper.progress_message = msg
-
-    def _data(self, value):
-        # Multi-port routing: when the wrapper advertises a primary
-        # port name (the new pipeline does; the legacy app's wrapper
-        # doesn't), translate the bare-value form into the explicit
-        # {port_name: payload} form before forwarding. Operators that
-        # already pass a dict (multi-port preview) are passed through
-        # untouched.
-        wrapper = self._operator._operator_wrapper
-        primary = getattr(wrapper, 'primary_port', None)
-        if primary and not isinstance(value, dict):
-            value = {primary: value}
-
-        wrapper.progress_data = value
-
-    # Write-only property to update child data
-    data = property(fset=_data,
-                    doc="""
-                    :meta private:
-                    """)
+from .kernels import Progress
 
 
 class Operator:
@@ -99,8 +20,12 @@ class Operator:
 
     Progress can be utilized and modified via the `self.progress` object.
     Details about the `self.progress` object interface can be see in the
-    `tomviz_pipeline.operators.Progress` class.
+    `tomviz_pipeline.kernels.Progress` class.
     """
+    # Former name of the runtime's ``_execution_context``, which the tomviz
+    # desktop application still sets.
+    _operator_wrapper = AttributeAlias('_execution_context')
+
     def __new__(cls, *args, **kwargs):
         """
         :meta private:
@@ -167,7 +92,7 @@ class CancelableOperator(Operator):
         """
         :returns True if the operator has been canceled, False otherwise.
         """
-        return self._operator_wrapper.canceled
+        return self._execution_context.canceled
 
 
 class CompletableOperator(CancelableOperator):
@@ -210,4 +135,4 @@ class CompletableOperator(CancelableOperator):
         :returns True if the operator is early completed (from Button),
         False otherwise
         """
-        return self._operator_wrapper.completed
+        return self._execution_context.completed

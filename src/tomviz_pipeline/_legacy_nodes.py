@@ -2,7 +2,7 @@
 # This source file is part of the tomviz-pipeline project.
 # It is released under the 3-Clause BSD License, see "LICENSE".
 ###############################################################################
-"""Legacy names for schema-v2 operator scripts.
+"""Legacy names for the schema-v2 kernel base classes.
 
 Older scripts import ``tomviz.nodes`` and subclass ``SourceNode`` /
 ``TransformNode``; the ``tomviz.nodes`` alias installed by

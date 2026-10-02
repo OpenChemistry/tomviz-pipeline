@@ -70,7 +70,7 @@ class PipelineExecutor:
     def cancel(self):
         """Request cooperative cancellation: the plan stops at the next
         node boundary, and the currently running node is asked to stop
-        (observed by operators that poll their cancel flag). A node that
+        (observed by kernels that poll their cancel flag). A node that
         never polls runs to completion."""
         self._cancel_requested.set()
         node = self._current_node
@@ -116,6 +116,12 @@ class PipelineExecutor:
         outputs spill to their cache files. Leaf outputs are never taken
         and stay pinned on their ports. The legacy path runs with
         manage_residency=False and simply leaves every payload pinned.
+
+        A breakpoint stops its node and everything that node feeds, which
+        keep their state; branches that don't depend on it still run
+        (C++ parity). So does a node with an input left unlinked: it
+        cannot run yet, which is not a failure (the C++ executors run it
+        and fail it).
         """
         failed = False
         canceled = False
@@ -123,6 +129,9 @@ class PipelineExecutor:
         # Strong handles for payloads taken off producer ports during
         # this plan, keyed by id(OutputPort). Dropped at end of plan.
         inflight: dict = {}
+        # id() of the nodes stopped (by a breakpoint, or an unlinked
+        # input), and of those they feed.
+        stopped: set[int] = set()
 
         try:
             for node in plan:
@@ -137,10 +146,25 @@ class PipelineExecutor:
                     # producer feeding only sinks keeps its data pinned.
                     continue
 
+                if any(id(u) in stopped for u in node.upstream_nodes()):
+                    # Fed by a stopped node: wait with it.
+                    stopped.add(id(node))
+                    continue
+
+                unlinked = [port.name for port in node.input_ports()
+                            if port.link is None]
+                if unlinked:
+                    logger.info("Skipping '%s' (id=%d): %s not linked",
+                                node.label or type(node).__name__, node.id,
+                                ', '.join(unlinked))
+                    stopped.add(id(node))
+                    continue
+
                 if self.honor_breakpoints and node.breakpoint:
                     breakpoint_hit = True
                     self.breakpoint_reached.emit(node)
-                    break
+                    stopped.add(id(node))
+                    continue
 
                 # If any upstream node ended up Stale, cascade.
                 if any(u.state == NodeState.Stale

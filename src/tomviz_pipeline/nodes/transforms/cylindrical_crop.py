@@ -4,7 +4,7 @@
 ###############################################################################
 """Cylindrical Crop — masks voxels outside a cylinder with arbitrary axis.
 
-Parameters mirror those of the legacy CylindricalCrop.py operator so that
+Parameters mirror those of the legacy CylindricalCrop.py kernel so that
 the same JSON state can drive both the legacy and new pipeline paths."""
 
 import copy

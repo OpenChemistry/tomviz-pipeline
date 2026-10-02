@@ -2,7 +2,7 @@
 # This source file is part of the tomviz-pipeline project.
 # It is released under the 3-Clause BSD License, see "LICENSE".
 ###############################################################################
-"""Compatibility shims for operator scripts written against the old
+"""Compatibility shims for kernel scripts written against the old
 `tomviz` import package.
 
 Operator scripts embedded in state files contain `import tomviz.operators`
@@ -18,7 +18,7 @@ import importlib.util
 import sys
 import types
 
-# Alias name (as operator scripts import it) -> module in this package.
+# Alias name (as kernel scripts import it) -> module in this package.
 _ALIASES = {
     'tomviz.operators': 'tomviz_pipeline.operators',
     'tomviz.nodes': 'tomviz_pipeline._legacy_nodes',
@@ -31,7 +31,7 @@ _decided = False
 
 
 def install_script_module_aliases():
-    """Register `tomviz.*` sys.modules aliases for operator scripts.
+    """Register `tomviz.*` sys.modules aliases for kernel scripts.
 
     Idempotent, and deliberately conservative: the decision is made once
     per process using importlib.util.find_spec('tomviz') — if a real
@@ -77,7 +77,7 @@ def _augment_with_legacy(bases: list, module_name: str,
     """Extend `bases` with the same-named classes from a real `tomviz`
     install, when one is importable and distinct from ours. Needed in
     environments where the old tomviz Python package coexists with this
-    one: operator scripts there subclass the *old* base classes, and
+    one: kernel scripts there subclass the *old* base classes, and
     class discovery must recognize both."""
     try:
         legacy = importlib.import_module(module_name)
@@ -90,8 +90,8 @@ def _augment_with_legacy(bases: list, module_name: str,
     return tuple(bases)
 
 
-def operator_base_classes() -> tuple:
-    """Base classes a v1 operator script's class may derive from:
+def legacy_kernel_base_classes() -> tuple:
+    """Base classes a v1 kernel script's class may derive from:
     tomviz_pipeline.operators.Operator plus, if a real tomviz package is
     installed, its tomviz.operators.Operator."""
     from tomviz_pipeline import operators

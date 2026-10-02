@@ -187,15 +187,18 @@ def test_grouped_sinks_receive_the_upstream_data():
     assert all(s.state == NodeState.Current for s in sinks)
 
 
-def test_group_without_input_fails():
+def test_group_without_input_waits():
+    # Not linked, the group cannot run yet, and neither can its sinks;
+    # that is not a failure.
     p = Pipeline()
     group = p.add_node(SinkGroupNode())
     group.add_passthrough('out', 'ImageData')
     sink = p.add_node(_Collect())
     p.create_link(group.output_port('out'), sink.input_port('in'))
 
-    assert not p.execute().succeeded()
-    assert group.exec_state == NodeExecState.Failed
+    assert p.execute().succeeded()
+    assert group.exec_state == NodeExecState.Idle
+    assert group.state == NodeState.New
     assert sink.seen == []
 
 

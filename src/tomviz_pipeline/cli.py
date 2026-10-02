@@ -95,7 +95,7 @@ def _configure_logging():
 @click.option('-p', '--progress', 'progress_method',
               type=click.Choice(['tqdm', 'socket', 'files']),
               default='tqdm', show_default=True,
-              help='How to report operator progress.')
+              help='How to report kernel progress.')
 @click.option('-u', '--progress-path', 'progress_path',
               type=click.Path(), default=None,
               help='Socket path (socket mode) or directory (files mode).')
