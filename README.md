@@ -422,6 +422,29 @@ deserialize in processes where the application's classes are importable
 — a scriptable node round-trips anywhere because it travels with its
 script.
 
+## Saving and loading state files
+
+Applications save their session with `save_state`, the counterpart of
+`load_state`. A `.tvh5` file also embeds the data of the persistent output
+ports, so loading it does not recompute them; `.tvsm` (or `.json`) is the
+graph alone:
+
+```python
+from tomviz_pipeline.state import load_state, read_state_json, save_state
+
+pipeline = load_state('session.tvh5')
+extra = {k: v for k, v in read_state_json('session.tvh5').items()
+         if k in ('views', 'layouts')}
+save_state('copy.tvh5', pipeline, extra)
+```
+
+`extra` holds the application's own top-level sections (views, layouts,
+...), which the library writes without interpreting, as it does with each
+output port's `metadata` dict (color maps, active scalars) and the settings
+of sinks it has no class for. Relative reader paths are rewritten so they
+still name the same files from the new location. To build the document on
+one thread and write it on another, call `build_state` then `write_state`.
+
 ## Running a state file
 
 ```bash

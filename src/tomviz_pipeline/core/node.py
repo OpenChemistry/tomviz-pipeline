@@ -8,6 +8,7 @@ class shapes of the C++ pipeline library in tomviz."""
 
 from __future__ import annotations
 
+import copy
 import enum
 import logging
 import os
@@ -223,6 +224,13 @@ class OutputPort(Port):
     Node.recompute_effective_types. Assigning ``port_type`` sets both, as
     the C++ setDeclaredType does.
 
+    Metadata: ``metadata`` is the port's ``metadata`` entry in the state
+    file, what the C++ side saves from the payload's display state
+    (``colorOpacityMap``, ``activeScalars``, ``label``, ...). The library
+    does not interpret it: the loader puts back what the file carries,
+    applications keep what they display in it, and it is written as is.
+    It belongs to the port, so it survives re-execution.
+
     Signals:
       data_changed(port)
       data_location_changed(port, DataLocation)
@@ -249,6 +257,7 @@ class OutputPort(Port):
         # the cache file behind.
         weakref.finalize(self, _DiskCache.finalize, self._disk)
         self.outgoing_links: list[Link] = []
+        self.metadata: dict = {}
         self.data_changed = Signal('data_changed')
         self.data_location_changed = Signal('data_location_changed')
 
@@ -415,6 +424,21 @@ class OutputPort(Port):
             self._on_disk = False
         self.data_changed.emit(self)
         self.data_location_changed.emit(self, DataLocation.Nowhere)
+
+    # ---- metadata --------------------------------------------------------
+
+    def serialize(self) -> dict:
+        """The port's state-file ``metadata`` entry (empty: none is
+        written). A deep copy, so the state dict can be written while the
+        application keeps editing ``metadata``. Mirrors the C++
+        OutputPort::serialize."""
+        return copy.deepcopy(self.metadata)
+
+    def deserialize(self, data: dict) -> bool:
+        """Take a saved ``metadata`` entry. Mirrors the C++
+        OutputPort::deserialize."""
+        self.metadata = copy.deepcopy(dict(data or {}))
+        return True
 
     # ---- internals -------------------------------------------------------
 
@@ -862,6 +886,9 @@ class Node:
                 if (port.persistent
                         and port.persistence_mode == PersistenceMode.OnDisk):
                     entry['persistenceMode'] = 'disk'
+                metadata = port.serialize()
+                if metadata:
+                    entry['metadata'] = metadata
                 ports[port.name] = entry
             data['outputPorts'] = ports
         if self._input_ports:
@@ -909,6 +936,8 @@ class Node:
                 if 'persistenceMode' in entry:
                     port.persistence_mode = persistence_mode_from_string(
                         entry['persistenceMode'])
+                if 'metadata' in entry:
+                    port.deserialize(entry['metadata'])
         return True
 
 

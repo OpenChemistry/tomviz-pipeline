@@ -6,19 +6,29 @@
 bundles a schema-v2 state JSON with per-port voxel data inside one
 HDF5 file. Mirrors the C++ ``Tvh5Format::write`` so files produced
 here can be loaded by the in-app pipeline as well as round-tripped
-by :func:`tomviz_pipeline.state.load_state`."""
+by :func:`tomviz_pipeline.state.load_state`.
+
+:func:`save_state` is the counterpart of ``load_state`` for an
+application saving its session: :func:`build_state` makes the document
+(the graph plus the application's own top-level sections, as the C++
+``Tvh5Format::write`` takes ``extraState``) and :func:`write_state`
+writes it, ``.tvh5`` or plain JSON by suffix."""
 
 import copy
 import json
 import logging
+import os
+import uuid
 from pathlib import Path
 
 import h5py
 import numpy as np
 
 from tomviz_pipeline.core import SinkGroupNode, SinkNode
+from tomviz_pipeline.core.state import pipeline_to_state_dict
 from tomviz_pipeline.io.emd import _write_emd_node_into
 from tomviz_pipeline.molecule import Molecule
+from tomviz_pipeline.nodes.sources.reader import ReaderSourceNode
 from tomviz_pipeline.table import Table
 
 
@@ -217,9 +227,12 @@ def _write_pure_molecule_into(group: 'h5py.Group',
         group.create_dataset('bondOrders', data=molecule.bond_orders)
 
 
-def write_state_tvh5(target_path, state_json: dict, pipeline) -> None:
+def write_state_tvh5(target_path, state_json: dict, pipeline,
+                     persistent_only: bool = False) -> None:
     """Write ``state_json`` plus every populated, non-sink output port
-    into ``target_path`` as a ``.tvh5`` HDF5 container.
+    into ``target_path`` as a ``.tvh5`` HDF5 container. With
+    ``persistent_only``, transient ports are left out, as the C++ app
+    does when it saves (they are recomputed on load).
 
     For every node N with output port P that carries a Dataset payload
     (volume data), the voxels are written under ``/data/<N>/<P>/`` in
@@ -244,7 +257,7 @@ def write_state_tvh5(target_path, state_json: dict, pipeline) -> None:
     target_path = Path(target_path)
     with h5py.File(target_path, 'w') as f:
         f.create_group('/data')
-        for node in pipeline.nodes:
+        for node in list(pipeline.nodes):
             # A sink group's passthrough ports forward the upstream
             # payload; embedding them would duplicate the data.
             if isinstance(node, (SinkNode, SinkGroupNode)):
@@ -254,6 +267,8 @@ def write_state_tvh5(target_path, state_json: dict, pipeline) -> None:
                 continue
             outputs = entry.setdefault('outputPorts', {})
             for port in node.output_ports():
+                if persistent_only and not port.persistent:
+                    continue
                 # materialize() (not data()) so a persistent-OnDisk
                 # port whose payload was evicted to its cache file is
                 # still embedded; the handle keeps it alive for the
@@ -300,3 +315,92 @@ def write_state_tvh5(target_path, state_json: dict, pipeline) -> None:
         state_bytes = json.dumps(snapshot).encode('utf-8')
         f.create_dataset('tomviz_state',
                          data=np.frombuffer(state_bytes, dtype='i1'))
+
+
+# ---- saving a session ----------------------------------------------------
+
+
+def build_state(pipeline, extra: dict = None, state_dir=None) -> dict:
+    """The schema-v2 document for ``pipeline``: the graph
+    (:func:`pipeline_to_state_dict`) plus the application's own
+    top-level sections in ``extra`` (views, layouts, ...), whose keys win
+    as in the C++ ``Tvh5Format::write``. Copies everything, so the
+    document can be written in another thread while the application
+    goes on.
+
+    ``state_dir`` is the directory the file is going to: relative reader
+    paths are re-expressed against it so they still name the same files
+    (absolute ones are kept). Without it they are written as they are."""
+    state = pipeline_to_state_dict(pipeline)
+    if state_dir is not None:
+        _rebase_file_names(pipeline, state, Path(state_dir))
+    if extra:
+        state.update(copy.deepcopy(extra))
+    return state
+
+
+def write_state(state_file_path, state: dict, pipeline,
+                persistent_only: bool = True) -> None:
+    """Write the document ``state`` (see :func:`build_state`) to
+    ``state_file_path``. A ``.tvh5`` also embeds the payloads of the
+    pipeline's output ports, by default only the persistent ones, as the
+    C++ app does; any other suffix (``.tvsm``, ``.json``) is plain JSON.
+
+    The file is written next to the target and moved over it once
+    complete, so a failed save leaves an existing file as it was. The
+    payloads are read from the pipeline's ports while writing: the
+    caller keeps the pipeline from executing or changing meanwhile."""
+    target = Path(state_file_path)
+    temporary = target.with_name(
+        f'.{target.name}.{uuid.uuid4().hex[:8]}.tmp')
+    try:
+        if target.suffix.lower() == '.tvh5':
+            write_state_tvh5(temporary, state, pipeline,
+                             persistent_only=persistent_only)
+        else:
+            with open(temporary, 'w', encoding='utf-8') as f:
+                json.dump(state, f, indent=2)
+        os.replace(temporary, target)
+    except BaseException:
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+        raise
+
+
+def save_state(state_file_path, pipeline, extra: dict = None,
+               persistent_only: bool = True) -> None:
+    """Save ``pipeline`` to a ``.tvsm`` / ``.json`` or ``.tvh5`` state
+    file, the counterpart of :func:`load_state`: :func:`build_state`
+    then :func:`write_state`. ``extra`` holds the application's own
+    top-level sections."""
+    path = Path(state_file_path)
+    write_state(path, build_state(pipeline, extra, path.parent), pipeline,
+                persistent_only=persistent_only)
+
+
+def _rebase_file_names(pipeline, state: dict, state_dir: Path):
+    """Re-express the relative reader paths of ``state`` against
+    ``state_dir``."""
+    target = state_dir.resolve()
+    entries = {entry['id']: entry
+               for entry in state['pipeline']['nodes']}
+    for node in pipeline.nodes:
+        entry = entries.get(node.id)
+        if entry is None or not isinstance(node, ReaderSourceNode):
+            continue
+        entry['fileNames'] = [_rebased(node, name, target)
+                              for name in node.file_names]
+
+
+def _rebased(node, file_name: str, target: Path) -> str:
+    if Path(file_name).is_absolute():
+        return file_name
+    # Absolute even without a state directory: the reader opens such a
+    # path from the working directory.
+    path = node.resolve_path(file_name).resolve()
+    try:
+        return Path(os.path.relpath(path, target)).as_posix()
+    except ValueError:
+        return str(path)  # another drive (Windows)

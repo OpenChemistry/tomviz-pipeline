@@ -56,6 +56,17 @@ class ReaderSourceNode(SourceNode):
             data.get('readerOptions', {}))
         return True
 
+    def resolve_path(self, file_name) -> Path:
+        """The file ``file_name`` names: a relative path is taken against
+        the directory of the state file the node was loaded from, when
+        there is one (else it stays relative to the working directory)."""
+        path = Path(file_name)
+        if not path.is_absolute():
+            state_dir = getattr(self, '_state_dir', None)
+            if state_dir is not None:
+                path = (state_dir / path).resolve()
+        return path
+
     def execute(self) -> bool:
         if not self.file_names:
             return False
@@ -72,12 +83,7 @@ class ReaderSourceNode(SourceNode):
 
         # First file only — mirrors the C++ side: stack support belongs
         # to ParaView readers we don't replicate here.
-        path = Path(self.file_names[0])
-        if not path.is_absolute():
-            # Resolve against the state file directory if possible.
-            state_dir = getattr(self, '_state_dir', None)
-            if state_dir is not None:
-                path = (state_dir / path).resolve()
+        path = self.resolve_path(self.file_names[0])
 
         dataset = load_dataset(path, read_options or None)
 

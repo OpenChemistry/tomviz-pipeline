@@ -39,10 +39,10 @@ class PassthroughOutputPort(OutputPort):
 
     A passthrough owns no data: it always reports non-persistent (state
     writers skip it, and an old state file's persistent flag cannot flip
-    it) and set_data() with a payload is refused. Its effective type
-    follows the source's through the group's type inference (the
-    passthrough is declared 'ImageData' with itself as inference source).
-    Only sinks may link to it."""
+    it), carries no metadata (the source port does) and set_data() with a
+    payload is refused. Its effective type follows the source's through
+    the group's type inference (the passthrough is declared 'ImageData'
+    with itself as inference source). Only sinks may link to it."""
 
     def __init__(self, name: str, port_type: str):
         self._source: Optional[OutputPort] = None
@@ -123,6 +123,14 @@ class PassthroughOutputPort(OutputPort):
 
     def clear_data(self):
         pass
+
+    # ---- metadata --------------------------------------------------------
+
+    def serialize(self) -> dict:
+        return {}
+
+    def deserialize(self, data: dict) -> bool:
+        return True
 
     def can_accept_link(self, to_port: InputPort) -> bool:
         """Only sinks may join a group."""
