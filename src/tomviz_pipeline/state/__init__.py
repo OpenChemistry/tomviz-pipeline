@@ -8,11 +8,20 @@ payloads. Layered on the generic JSON graph (de)serialization in
 tomviz_pipeline.core.state."""
 
 from .state_io import load_state, read_state_json
-from .state_writer import VTK_STRING, write_state_tvh5
+from .state_writer import (
+    VTK_STRING,
+    build_state,
+    save_state,
+    write_state,
+    write_state_tvh5,
+)
 
 __all__ = [
     'VTK_STRING',
+    'build_state',
     'load_state',
     'read_state_json',
+    'save_state',
+    'write_state',
     'write_state_tvh5',
 ]

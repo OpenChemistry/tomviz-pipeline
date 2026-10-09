@@ -78,6 +78,9 @@ _LAZY = {
     'PythonNode': ('tomviz_pipeline.nodes.scriptable', 'ScriptableNode'),
     'read_state_json': ('tomviz_pipeline.state', 'read_state_json'),
     'write_state_tvh5': ('tomviz_pipeline.state', 'write_state_tvh5'),
+    'save_state': ('tomviz_pipeline.state', 'save_state'),
+    'build_state': ('tomviz_pipeline.state', 'build_state'),
+    'write_state': ('tomviz_pipeline.state', 'write_state'),
     'register_builtins': ('tomviz_pipeline.nodes', 'register_builtins'),
     'run': ('tomviz_pipeline.runner', 'run'),
 }
