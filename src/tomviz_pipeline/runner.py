@@ -76,7 +76,7 @@ from tomviz_pipeline.core import (
 )
 from tomviz_pipeline.leaf_writer import write_leaf_outputs
 from tomviz_pipeline.nodes.sources.reader import ReaderSourceNode
-from tomviz_pipeline.progress import make_progress
+from tomviz_pipeline.progress import JsonProgress, make_progress
 from tomviz_pipeline.state import (
     load_state,
     read_state_json,
@@ -213,10 +213,14 @@ def run(
         with progress as progress_obj:
             progress_obj.started()
             # Headless runs must never park on breakpoints saved in the
-            # state file, so breakpoint honoring is disabled.
+            # state file, so breakpoint honoring is disabled. With a
+            # parent listening (socket, files), what kernels print goes
+            # to it as `output` messages.
             ok = DefaultExecutor(
                 pipeline, progress=progress_obj,
-                honor_breakpoints=False).execute()
+                honor_breakpoints=False,
+                capture_output=isinstance(progress_obj, JsonProgress),
+            ).execute()
             progress_obj.finished()
 
         if not ok:

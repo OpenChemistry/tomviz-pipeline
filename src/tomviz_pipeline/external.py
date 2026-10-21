@@ -18,10 +18,14 @@ Protocol (unchanged from C++ so either side can drive the same child):
    environment.
 3. Stream JSON-line progress messages back (Unix-domain socket on POSIX,
    a polled directory of numbered files elsewhere) and forward them to
-   the node's progress API. cancel/complete travel the other way on the
-   same channel (a JSON line, or a ``<signal>.flag`` file) — soft
-   signals the child observes at its next poll; the child is never
-   killed, matching in-process cooperative-cancel semantics.
+   the node's progress API, and what the kernel printed (``output``
+   messages, batched about once a second) to its ``output_written``
+   signal. A reader skips message types it does not know, with a
+   warning, so a newer child can talk to an older parent.
+   cancel/complete travel the other way on the same channel (a JSON
+   line, or a ``<signal>.flag`` file) — soft signals the child observes
+   at its next poll; the child is never killed, matching in-process
+   cooperative-cancel semantics.
 4. On a zero exit code, read ``out/output_state.tvh5`` and copy the
    clone's populated output-port payloads onto the real node.
 
@@ -118,7 +122,10 @@ class ProgressReader:
       node_started(id), node_finished(id), node_error(id, message),
       node_progress_maximum(id, value), node_progress_step(id, value),
       node_progress_message(id, message), node_progress_data(id, path),
-      pipeline_started(), pipeline_finished()
+      node_output(id, text), pipeline_started(), pipeline_finished()
+
+    A message type it does not know is skipped with a warning: a newer
+    child may send kinds this parent has no use for.
     """
 
     def __init__(self, path: str):
@@ -130,6 +137,7 @@ class ProgressReader:
         self.node_progress_step = Signal('node_progress_step')
         self.node_progress_message = Signal('node_progress_message')
         self.node_progress_data = Signal('node_progress_data')
+        self.node_output = Signal('node_output')
         self.pipeline_started = Signal('pipeline_started')
         self.pipeline_finished = Signal('pipeline_finished')
 
@@ -176,8 +184,10 @@ class ProgressReader:
                                                 obj.get('value', ''))
             elif msg_type == 'progress.data':
                 self.node_progress_data.emit(node_id, obj.get('value', ''))
+            elif msg_type == 'output':
+                self.node_output.emit(node_id, obj.get('value', ''))
             else:
-                logger.error('Unrecognized message type: %s', msg_type)
+                logger.warning('Unrecognized message type: %s', msg_type)
             return
 
         if msg_type == 'started':
@@ -185,7 +195,7 @@ class ProgressReader:
         elif msg_type == 'finished':
             self.pipeline_finished.emit()
         else:
-            logger.error('Unrecognized message type: %s', msg_type)
+            logger.warning('Unrecognized message type: %s', msg_type)
 
 
 class FilesProgressReader(ProgressReader):
@@ -233,8 +243,11 @@ class FilesProgressReader(ProgressReader):
 
     def _drain(self):
         try:
-            names = sorted(p for p in os.listdir(self.path)
-                           if p.startswith('progress'))
+            # In the order written: progress10 comes after progress9
+            names = sorted((p for p in os.listdir(self.path)
+                            if p.startswith('progress')
+                            and p[len('progress'):].isdigit()),
+                           key=lambda p: int(p[len('progress'):]))
         except OSError:
             return
         for name in names:
@@ -579,6 +592,10 @@ class ExternalNodeExecutor(NodeExecutor):
                     'ExternalNodeExecutor: node %d reported error: %s',
                     node_id, error)
 
+        def on_output(node_id, text):
+            if node_id == target_id:
+                node.output_written.emit(node, text)
+
         def on_data(node_id, filename):
             if node_id != target_id or not filename:
                 return
@@ -596,6 +613,7 @@ class ExternalNodeExecutor(NodeExecutor):
         reader.node_progress_message.connect(on_message)
         reader.node_error.connect(on_error)
         reader.node_progress_data.connect(on_data)
+        reader.node_output.connect(on_output)
 
         reader.start()
         self._reader = reader

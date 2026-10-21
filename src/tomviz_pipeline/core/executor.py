@@ -15,6 +15,7 @@ ExternalNodeExecutor)."""
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 from typing import Optional
@@ -29,6 +30,7 @@ from .node import (
     TransformNode,
 )
 from .node_executor import InternalNodeExecutor
+from .output import captured
 
 logger = logging.getLogger('tomviz_pipeline')
 
@@ -46,10 +48,15 @@ class PipelineExecutor:
     """
 
     def __init__(self, pipeline=None, progress=None,
-                 honor_breakpoints: bool = True):
+                 honor_breakpoints: bool = True,
+                 capture_output: bool = False):
         self.pipeline = pipeline
         self.progress = progress
         self.honor_breakpoints = honor_breakpoints
+        # Hand what in-process kernels print to their node's
+        # output_written signal (and to the progress reporter's
+        # output(), which a CLI child forwards to its parent).
+        self.capture_output = capture_output
         self._cancel_requested = threading.Event()
         self._current_node = None
 
@@ -233,8 +240,13 @@ class PipelineExecutor:
         label = node.label or type(node).__name__
         logger.info("Executing '%s' (id=%d)", label, node.id)
         node_executor = node.node_executor or InternalNodeExecutor.instance()
+        # An external node's output comes over its progress channel.
+        capturing = (self.capture_output
+                     and isinstance(node_executor, InternalNodeExecutor))
         try:
-            ok = node_executor.execute(node)
+            with (captured(lambda text: self._deliver_output(node, text))
+                  if capturing else contextlib.nullcontext()):
+                ok = node_executor.execute(node)
         except Exception:
             logger.exception("Node '%s' (id=%d) raised", label, node.id)
             ok = False
@@ -263,6 +275,12 @@ class PipelineExecutor:
         self._post_node_barrier()
         return ok
 
+    def _deliver_output(self, node, text: str):
+        node.output_written.emit(node, text)
+        forward = getattr(self.progress, 'output', None)
+        if forward is not None:
+            forward(node.id, text)
+
     def _post_node_barrier(self):
         """Hook run after each node's signals are emitted. Overridden by
         ThreadedExecutor to wait for the application's event queue."""
@@ -284,8 +302,10 @@ class DefaultExecutor(PipelineExecutor):
     Current nodes at runtime."""
 
     def __init__(self, pipeline=None, progress=None,
-                 honor_breakpoints: bool = True):
-        super().__init__(pipeline, progress, honor_breakpoints)
+                 honor_breakpoints: bool = True,
+                 capture_output: bool = False):
+        super().__init__(pipeline, progress, honor_breakpoints,
+                         capture_output)
         self._running = False
 
     def execute(self, plan=None) -> bool:
@@ -351,8 +371,10 @@ class ThreadedExecutor(PipelineExecutor):
 
     def __init__(self, pipeline=None, progress=None,
                  honor_breakpoints: bool = True,
-                 sync_queue: Optional[EventQueue] = None):
-        super().__init__(pipeline, progress, honor_breakpoints)
+                 sync_queue: Optional[EventQueue] = None,
+                 capture_output: bool = False):
+        super().__init__(pipeline, progress, honor_breakpoints,
+                         capture_output)
         self.sync_queue = sync_queue
         self._lock = threading.RLock()
         self._thread: Optional[threading.Thread] = None

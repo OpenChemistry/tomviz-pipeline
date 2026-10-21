@@ -122,6 +122,33 @@ def resolve_enum_default(param: dict):
     return enum_option_value(options[default])
 
 
+# The values a parameter's ``data-default`` may name (the tomviz
+# desktop's InterfaceBuilder): the input's size along an axis, x first.
+_DATA_DEFAULT_AXES = {'num-voxels-x': 0, 'num-voxels-y': 1, 'num-voxels-z': 2}
+
+
+def resolve_data_default(param: dict, shape):
+    """The value a parameter's ``data-default`` takes for input data of
+    ``shape`` (the active array's shape, ``(x, y, z)``):
+    ``num-voxels-x`` / ``-y`` / ``-z`` is the input's size along that
+    axis, as the parameter's declared type. ``None`` when the parameter
+    has no ``data-default``, names one this library does not know, or
+    ``shape`` has no such axis."""
+    axis = _DATA_DEFAULT_AXES.get(param.get('data-default'))
+    if axis is None or shape is None or len(shape) <= axis:
+        return None
+    return coerce_parameter_default(param.get('type', ''), int(shape[axis]))
+
+
+def _payload_shape(payload):
+    """The shape of a dataset payload's active array, else ``None``."""
+    arrays = getattr(payload, 'arrays', None)
+    name = getattr(payload, 'active_name', None)
+    if not isinstance(arrays, dict) or name not in arrays:
+        return None
+    return getattr(arrays[name], 'shape', None)
+
+
 def merge_parameter_values(previous_values: dict, previous_types: dict,
                            new_defaults: dict, new_types: dict,
                            new_enum_options: dict,
@@ -316,6 +343,37 @@ class BaseKernelBackend:
             self.parameters[key] = value
 
     # ---- execution -----------------------------------------------------
+
+    def run_parameters(self, payload=None) -> dict[str, Any]:
+        """The parameter values a run hands the kernel: the node's,
+        plus a value for every ``data-default`` parameter holding none
+        (or ``None``), resolved from ``payload``, the data on the
+        node's primary input (see resolve_data_default). The resolved
+        values stay out of ``parameters``: an unset parameter follows
+        the data on every run, and nothing is saved for it. One that
+        cannot be resolved is left out, so the kernel's own default
+        applies."""
+        values = dict(self.parameters)
+        for name, spec in self._parameter_specs.items():
+            if 'data-default' not in spec or values.get(name) is not None:
+                continue
+            values.pop(name, None)
+            key = spec['data-default']
+            if key not in _DATA_DEFAULT_AXES:
+                logger.warning(
+                    "Unknown data-default '%s' for parameter '%s' of %s: "
+                    "the script's default applies", key, name,
+                    self.kernel_name)
+                continue
+            value = resolve_data_default(spec, _payload_shape(payload))
+            if value is None:
+                logger.warning(
+                    "No input data to resolve parameter '%s' of %s from "
+                    "(%s): the script's default applies", name,
+                    self.kernel_name, key)
+                continue
+            values[name] = value
+        return values
 
     def run_transform(self, host, inputs: dict[str, PortData]
                       ) -> dict[str, PortData]:

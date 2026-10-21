@@ -8,6 +8,7 @@ strictness, serialization via source capture — and the definition and
 script API every scriptable node shares."""
 
 import json
+import logging
 
 import numpy as np
 import pytest
@@ -18,8 +19,10 @@ from tomviz_pipeline import (
     Pipeline,
     PortData,
     ScriptableNode,
+    SourceNode,
     definition_schema,
     register_builtins,
+    resolve_data_default,
 )
 from tomviz_pipeline.core.state import (
     pipeline_from_state_dict,
@@ -509,6 +512,130 @@ def test_legacy_script_that_fails_to_load_returns_no_outputs():
     data = Dataset({'Scalars': np.zeros((2, 2, 2), dtype=np.float32)},
                    active='Scalars')
     assert node.transform({'volume': PortData(data, 'ImageData')}) == {}
+
+
+# ---- data-default parameters ------------------------------------------------
+
+def _sized_v1_defn(data_default='num-voxels-y'):
+    return {
+        'name': 'Sized',
+        'label': 'Sized',
+        'parameters': [{'name': 'size', 'type': 'int',
+                        'data-default': data_default, 'minimum': 1}],
+    }
+
+
+# Fills the volume with the size it receives; -1 is the script default.
+SIZED_V1_SCRIPT = '''
+def transform(dataset, size=-1):
+    dataset.active_scalars = dataset.active_scalars * 0 + size
+'''
+
+
+class Sized(TransformKernel):
+    def transform(self, inputs, size=-1):
+        assert self.parameter('size') == size
+        ds = inputs['volume']
+        return {'volume': ds.apply_to_each_scalar_array(
+            lambda a: a * 0 + size)}
+
+
+SIZED_V2_DEFN = {
+    'schemaVersion': 2,
+    'name': 'Sized',
+    'inputs': [{'name': 'volume', 'type': 'ImageData'}],
+    'outputs': [{'name': 'volume', 'type': 'ImageData'}],
+    'parameters': [{'name': 'size', 'type': 'int',
+                    'data-default': 'num-voxels-z'}],
+}
+
+
+def _shaped_data(shape):
+    return PortData(
+        Dataset({'Scalars': np.zeros(shape, dtype=np.float32, order='F')},
+                active='Scalars'),
+        'ImageData')
+
+
+def _sized_pipeline(node, shape=(2, 3, 4)):
+    pipeline = Pipeline()
+    source = pipeline.add_node(SourceNode())
+    source.add_output('volume', 'ImageData').set_data(_shaped_data(shape))
+    source.state = NodeState.Current
+    pipeline.add_node(node)
+    pipeline.create_link(source.output_port('volume'),
+                         node.input_port('volume'))
+    return pipeline, source
+
+
+def _filled_with(node):
+    payload = node.output_port('volume').data().payload
+    values = np.unique(payload.active_scalars)
+    assert len(values) == 1
+    return values[0]
+
+
+def test_resolve_data_default():
+    spec = {'name': 'n', 'type': 'int', 'data-default': 'num-voxels-y'}
+    assert resolve_data_default(spec, (2, 3, 4)) == 3
+    x = dict(spec, **{'data-default': 'num-voxels-x'})
+    assert resolve_data_default(x, (2, 3, 4)) == 2
+    z = dict(spec, **{'data-default': 'num-voxels-z'})
+    assert resolve_data_default(z, (2, 3, 4)) == 4
+    assert resolve_data_default(z, (2, 3)) is None
+    assert resolve_data_default(z, None) is None
+    value = resolve_data_default(dict(spec, type='double'), (2, 3, 4))
+    assert value == 3.0 and isinstance(value, float)
+    unknown = dict(spec, **{'data-default': 'num-voxels-w'})
+    assert resolve_data_default(unknown, (2, 3, 4)) is None
+    assert resolve_data_default({'name': 'n', 'type': 'int'}, (2, 3)) is None
+
+
+def test_data_default_follows_the_input_on_every_run():
+    node = ScriptableNode(_sized_v1_defn(), kernel=SIZED_V1_SCRIPT)
+    pipeline, source = _sized_pipeline(node)
+
+    assert pipeline.execute().succeeded()
+    assert _filled_with(node) == 3  # the input's size along y
+    # Resolved for the run only: nothing is held or saved.
+    assert 'size' not in node.parameters
+    assert 'arguments' not in node.serialize()
+
+    source.output_port('volume').set_data(_shaped_data((2, 5, 4)))
+    node.mark_stale()
+    assert pipeline.execute().succeeded()
+    assert _filled_with(node) == 5
+
+
+def test_explicit_value_wins_over_data_default():
+    node = ScriptableNode(_sized_v1_defn(), kernel=SIZED_V1_SCRIPT,
+                          parameters={'size': 7})
+    pipeline, _ = _sized_pipeline(node)
+    assert pipeline.execute().succeeded()
+    assert _filled_with(node) == 7
+
+    # None is no value: the data decides again.
+    node.set_parameters(size=None)
+    assert pipeline.execute().succeeded()
+    assert _filled_with(node) == 3
+
+
+def test_unknown_data_default_leaves_the_script_default(caplog):
+    node = ScriptableNode(_sized_v1_defn('num-voxels-w'),
+                          kernel=SIZED_V1_SCRIPT)
+    pipeline, _ = _sized_pipeline(node)
+    with caplog.at_level(logging.WARNING, logger='tomviz_pipeline'):
+        assert pipeline.execute().succeeded()
+    assert _filled_with(node) == -1
+    assert "Unknown data-default 'num-voxels-w'" in caplog.text
+
+
+def test_v2_kernel_gets_the_data_default():
+    node = ScriptableNode(SIZED_V2_DEFN, kernel=Sized)
+    pipeline, _ = _sized_pipeline(node)
+    assert pipeline.execute().succeeded()
+    assert _filled_with(node) == 4  # the input's size along z
+    assert 'size' not in node.parameters
 
 
 # ---- former names -----------------------------------------------------------

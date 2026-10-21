@@ -203,6 +203,22 @@ Values a kernel writes back with `self.set_parameter` (see above) take
 the other door, `apply_parameter_updates()`: the store changes, nothing
 is marked stale, and only `parameters_updated` is emitted.
 
+A parameter the definition declares without a `default` holds no value,
+and the kernel's own Python default applies. One with a `data-default`
+instead takes its value from the data on the node's primary input
+whenever the node runs: `num-voxels-x`, `num-voxels-y` and
+`num-voxels-z` are the input's size along that axis. The resolved value
+is passed to the kernel but never stored, so it follows the input from
+run to run and is not saved in state files; setting a value (anything
+but `None`) overrides it. `resolve_data_default(spec, shape)` computes
+the same value, for a UI that wants to show it:
+
+```python
+# {"name": "Nrecon", "type": "int", "data-default": "num-voxels-y"}
+recon.parameter('Nrecon')                     # None: the data decides
+resolve_data_default(spec, (512, 256, 61))    # 256, what a run passes
+```
+
 ## Using it from an application
 
 A pipeline embedded in an application must not block the UI thread.
@@ -340,6 +356,30 @@ async def run_and_own(pipeline):
         pipeline.cancel_execution()   # propagate deliberately
         raise
 ```
+
+### What kernels print
+
+An executor built with `capture_output=True` hands what each kernel
+prints (`sys.stdout` and `sys.stderr`) to its node's
+`output_written(node, text)` signal, in batches about a second apart and
+once more when the kernel returns, before the node's finished signals.
+The text still reaches the terminal as before.
+
+```python
+pipeline.set_executor(ThreadedExecutor(capture_output=True))
+scale.output_written.connect(
+    lambda node, text: print(f'{node.label} printed {text!r}'),
+    dispatcher)
+```
+
+An in-process kernel is captured by thread: `sys.stdout` and
+`sys.stderr` get stand-ins that route the executing thread's writes to
+its node and pass every other write straight through. A node run by
+`ExternalNodeExecutor` sends its output over the progress channel as
+`output` messages (the child CLI captures whenever it reports to a
+parent), and the parent emits the same signal. Not seen: output of C
+code writing to the file descriptors directly, and of threads or
+processes a kernel starts itself.
 
 ## Output persistence
 

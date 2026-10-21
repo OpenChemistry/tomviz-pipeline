@@ -74,6 +74,8 @@ _LAZY = {
         'LegacyScriptableTransformNode'),
     'definition_schema': ('tomviz_pipeline.nodes.kernel_backends',
                           'definition_schema'),
+    'resolve_data_default': ('tomviz_pipeline.nodes.kernel_backends',
+                             'resolve_data_default'),
     # Former name of ScriptableNode.
     'PythonNode': ('tomviz_pipeline.nodes.scriptable', 'ScriptableNode'),
     'read_state_json': ('tomviz_pipeline.state', 'read_state_json'),

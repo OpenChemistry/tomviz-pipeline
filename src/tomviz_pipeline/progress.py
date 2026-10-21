@@ -18,6 +18,7 @@ import json
 import os
 import socket
 import stat
+import threading
 
 from tqdm import tqdm
 
@@ -28,6 +29,10 @@ class ProgressBase(object):
 
     def finished(self, node_id=None):
         pass
+
+    def output(self, node_id, text):
+        """What the kernel of ``node_id`` printed (executors with
+        ``capture_output``). Only the JSON modes pass it on."""
 
     def control_channel(self):
         """Return a ControlChannel for the parent → child direction,
@@ -159,7 +164,11 @@ class TqdmProgress(ProgressBase):
 
 class JsonProgress(ProgressBase, metaclass=abc.ABCMeta):
     """Base class for the socket and files progress modes. Subclasses
-    implement write() (emit one JSON message)."""
+    implement write() (emit one JSON message), under ``_write_lock``:
+    output arrives from a helper thread while the kernel reports
+    progress from its own."""
+
+    _write_lock = threading.Lock()
 
     # Set by the transform wrapper before the kernel runs so a bare
     # `self.progress.data = X` knows which output port to populate.
@@ -333,6 +342,9 @@ class JsonProgress(ProgressBase, metaclass=abc.ABCMeta):
             msg['operator'] = node_id
         self.write(msg)
 
+    def output(self, node_id, text):
+        self.write({'type': 'output', 'operator': node_id, 'value': text})
+
 
 def _infer_port_type(payload) -> str:
     """Classify an intermediate payload into the schema-v2 port type
@@ -388,7 +400,8 @@ class LocalSocketProgress(JsonProgress):
 
     def write(self, data):
         encoded = ('%s\n' % json.dumps(data)).encode('utf8')
-        self._connection.sendall(encoded)
+        with self._write_lock:
+            self._connection.sendall(encoded)
 
     def control_channel(self):
         if self._connection is None:
@@ -413,11 +426,12 @@ class FilesProgress(JsonProgress):
         self._sequence_number = 0
 
     def write(self, data):
-        file_path = os.path.join(self._path,
-                                 'progress%d' % self._sequence_number)
-        self._sequence_number += 1
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f)
+        with self._write_lock:
+            file_path = os.path.join(self._path,
+                                     'progress%d' % self._sequence_number)
+            self._sequence_number += 1
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f)
 
     def control_channel(self):
         return FilesControlChannel(self._path)
