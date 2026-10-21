@@ -527,6 +527,11 @@ class Node:
         changed parameter values during a run (apply_parameter_updates)
       output_type_changed(node, port, type) — an output's effective type
         changed (the Pipeline propagates it downstream)
+      output_written(node, text) — what the node's kernel printed, in
+        batches about a second apart, when its executor captures output
+        (``capture_output=True``, see core/output.py); emitted from the
+        executing thread, a helper thread, or the thread reading an
+        external node's progress channel
     """
 
     type_name: str = ''
@@ -582,6 +587,7 @@ class Node:
         self.progress_maximum_changed = Signal('progress_maximum_changed')
         self.progress_step_changed = Signal('progress_step_changed')
         self.progress_message_changed = Signal('progress_message_changed')
+        self.output_written = Signal('output_written')
 
     # ---- state -----------------------------------------------------------
 

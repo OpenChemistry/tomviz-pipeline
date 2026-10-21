@@ -156,7 +156,7 @@ class LegacyKernelBackend(BaseKernelBackend):
         if transform_fn is None:
             return {}
 
-        kwargs = dict(self.parameters)
+        kwargs = self.run_parameters(primary.payload)
         for name in self._dataset_input_names:
             port_data = inputs.get(name)
             if port_data is not None:

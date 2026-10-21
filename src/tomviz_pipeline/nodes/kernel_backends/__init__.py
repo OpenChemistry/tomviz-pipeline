@@ -14,6 +14,7 @@ from .base import (
     BaseKernelBackend,
     definition_schema,
     merge_parameter_values,
+    resolve_data_default,
 )
 from .kernel import KernelBackend, script_from_kernel
 from .legacy import LegacyKernelBackend
@@ -26,5 +27,6 @@ __all__ = [
     'LegacyKernelBackend',
     'definition_schema',
     'merge_parameter_values',
+    'resolve_data_default',
     'script_from_kernel',
 ]

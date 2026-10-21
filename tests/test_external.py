@@ -101,6 +101,66 @@ def test_external_execution_converts_to_float(fake_env):
         == np.uint16
 
 
+_SIZED_DESCRIPTION = {
+    'name': 'Sized',
+    'parameters': [{'name': 'size', 'type': 'int',
+                    'data-default': 'num-voxels-z'}],
+}
+
+_SIZED_SCRIPT = '''
+def transform(dataset, size=-1):
+    dataset.active_scalars = dataset.active_scalars * 0 + size
+'''
+
+
+def test_external_execution_resolves_data_default(fake_env):
+    """The clone the child runs holds no value either: the child takes
+    it from the input it receives, and nothing comes back to store."""
+    from tomviz_pipeline import ScriptableNode
+    p, src, _ = _external_pipeline(fake_env)
+    node = ScriptableNode(_SIZED_DESCRIPTION, kernel=_SIZED_SCRIPT)
+    node.node_executor = ExternalNodeExecutor(env_path=str(fake_env))
+    p.add_node(node)
+    p.create_link(src.output_port('volume'), node.input_port('volume'))
+
+    assert p.execute(node).succeeded() is True
+    result = node.output_port('volume').data().payload
+    assert np.all(result.active_scalars == 3)  # the input's size along z
+    assert 'size' not in node.parameters
+
+
+_PRINTING_DESCRIPTION = {'name': 'Printing', 'parameters': []}
+
+_PRINTING_SCRIPT = '''
+import sys
+
+
+def transform(dataset):
+    print("external says hi")
+    print("and warns", file=sys.stderr)
+'''
+
+
+def test_external_output_comes_over_the_progress_channel(fake_env):
+    """What the child's kernel prints reaches the node before the run
+    ends, through `output` messages."""
+    from tomviz_pipeline import ScriptableNode
+    p, src, _ = _external_pipeline(fake_env)
+    node = ScriptableNode(_PRINTING_DESCRIPTION, kernel=_PRINTING_SCRIPT)
+    node.node_executor = ExternalNodeExecutor(env_path=str(fake_env))
+    p.add_node(node)
+    p.create_link(src.output_port('volume'), node.input_port('volume'))
+    events = []
+    node.output_written.connect(lambda _n, text: events.append(text))
+    p.executor.node_execution_finished.connect(
+        lambda n, _ok: n is node and events.append('finished'))
+
+    assert p.execute(node).succeeded() is True
+    *texts, finished = events
+    assert finished == 'finished'
+    assert ''.join(texts) == 'external says hi\nand warns\n'
+
+
 # ---- executor block serialization --------------------------------------------
 
 

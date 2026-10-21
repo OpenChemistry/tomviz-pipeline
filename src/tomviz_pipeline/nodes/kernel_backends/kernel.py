@@ -207,13 +207,13 @@ class KernelBackend(BaseKernelBackend):
                 'found in the script of %s', kind, self.kernel_name)
         return user_class
 
-    def _instantiate(self, host, user_class):
+    def _instantiate(self, host, user_class, values: dict):
         # Kernel.__new__ pre-attaches a Progress(self); _attach_runtime
         # swaps in the runtime's progress reporter when there is one.
         instance = user_class()
         self._attach_runtime(host, instance)
         self._inject_state(host, instance)
-        self._inject_parameter_api(instance)
+        self._inject_parameter_api(instance, values)
         return instance
 
     def _run(self, host, inputs: dict[str, PortData],
@@ -222,8 +222,11 @@ class KernelBackend(BaseKernelBackend):
         if user_class is None:
             return {}
 
-        instance = self._instantiate(host, user_class)
-        kwargs = dict(self.parameters)
+        # data-default parameters follow the first declared input.
+        primary = inputs.get(self._inputs[0][0]) if self._inputs else None
+        kwargs = self.run_parameters(
+            primary.payload if primary is not None else None)
+        instance = self._instantiate(host, user_class, kwargs)
 
         try:
             if is_source:
@@ -275,14 +278,17 @@ class KernelBackend(BaseKernelBackend):
         instance = user_class()
         attach_execution_context(instance, ExecutionContext(None, node=host))
         self._inject_state(host, instance)
-        self._inject_parameter_api(instance)
+        # The hook runs without the inputs: data-default parameters it
+        # receives are only those holding a value.
+        values = dict(self.parameters)
+        self._inject_parameter_api(instance, values)
 
         method = getattr(instance, 'should_auto_execute', None)
         if not callable(method):
             # Script written against a kernel base predating the hook.
             return False
         try:
-            result = method(**dict(self.parameters))
+            result = method(**values)
         except Exception:
             logger.exception("should_auto_execute for '%s' raised",
                              self.kernel_name)
@@ -323,14 +329,15 @@ class KernelBackend(BaseKernelBackend):
                 'self.state must be a dict; ignoring the %s it was '
                 'rebound to', type(state).__name__)
 
-    def _inject_parameter_api(self, instance):
+    def _inject_parameter_api(self, instance, values: dict):
         """Give the user instance what ``self.set_parameter`` /
         ``self.parameter`` need: the declared parameter specs (for
-        validation and coercion) and the current values. Nothing is
-        shared with the backend — updates are collected afterwards by
+        validation and coercion) and the values of this run (see
+        ``run_parameters``). Nothing is shared with the backend —
+        updates are collected afterwards by
         ``_harvest_parameter_updates``."""
         instance._parameter_spec = dict(self._parameter_specs)
-        instance._parameter_values = dict(self.parameters)
+        instance._parameter_values = dict(values)
         instance._parameter_updates = {}
 
     @staticmethod
